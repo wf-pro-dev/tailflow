@@ -1,0 +1,29 @@
+services:
+  tailflow-backend:
+    build:
+      context: ..
+      dockerfile: docker/build/Dockerfile.backend
+    networks:
+      - tailflow-net
+    container_name: tailflow-backend
+    restart: unless-stopped
+    environment:
+      TAILFLOW_HOSTNAME: ${TAILFLOW_HOSTNAME:-tailflow}
+      TAILFLOW_LISTEN_ADDR: ${TAILFLOW_LISTEN_ADDR:-:8080}
+      TAILFLOW_DB_PATH: /var/lib/tailflow/tailflow.sqlite3
+      TAILFLOW_STATE_DIR: /var/lib/tailflow/tsnet
+      TAILFLOW_EPHEMERAL: ${TAILFLOW_EPHEMERAL:-false}
+      TAILFLOW_COLLECT_INTERVAL: ${TAILFLOW_COLLECT_INTERVAL:-30s}
+      TAILFLOW_COLLECT_JITTER: ${TAILFLOW_COLLECT_JITTER:-5s}
+      TAILFLOW_NODE_TIMEOUT: ${TAILFLOW_NODE_TIMEOUT:-10s}
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TSNET_FORCE_LOGIN: ${TSNET_FORCE_LOGIN:-}
+    volumes:
+      - tailflow-data:/var/lib/tailflow
+
+volumes:
+  tailflow-data:
+
+networks:
+  tailflow-net:
+    driver: bridge
