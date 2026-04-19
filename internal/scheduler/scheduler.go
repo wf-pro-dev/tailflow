@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"log"
 	"math/rand"
 	"sync"
 	"time"
@@ -171,20 +172,22 @@ func (s *Scheduler) startWatcher(ctx context.Context, nodeName core.NodeName) {
 }
 
 func (s *Scheduler) runCycle(ctx context.Context) error {
-	runCtx, cancel := context.WithTimeout(ctx, s.config.CollectInterval+s.config.NodeTimeout)
-	defer cancel()
-
-	run, err := s.collector.RunOnce(runCtx)
+	collectCtx, cancelCollect := context.WithTimeout(ctx, s.config.CollectInterval+s.config.NodeTimeout)
+	run, err := s.collector.RunOnce(collectCtx)
+	cancelCollect()
 	if err != nil && run.ID == "" {
 		return err
 	}
 
 	if s.resolver != nil && s.snapshots != nil && run.ID != "" {
-		snapshots, listErr := s.snapshots.ListByRun(runCtx, run.ID)
+		resolveCtx, cancelResolve := context.WithTimeout(ctx, s.config.NodeTimeout)
+		defer cancelResolve()
+
+		snapshots, listErr := s.snapshots.ListByRun(resolveCtx, run.ID)
 		if listErr != nil {
 			return listErr
 		}
-		if _, resolveErr := s.resolver.ResolveRun(runCtx, run, snapshots); resolveErr != nil {
+		if _, resolveErr := s.resolver.ResolveRun(resolveCtx, run, snapshots); resolveErr != nil {
 			return resolveErr
 		}
 	}
@@ -199,7 +202,9 @@ func (s *Scheduler) runCycle(ctx context.Context) error {
 func (s *Scheduler) Trigger() {
 	select {
 	case s.trigger <- struct{}{}:
+		log.Printf("scheduler: collection trigger queued")
 	default:
+		log.Printf("scheduler: collection trigger already pending")
 	}
 }
 

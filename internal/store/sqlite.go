@@ -97,7 +97,8 @@ func timeToTimestamp(t time.Time) core.Timestamp {
 
 type snapshotPayload struct {
 	Ports      []ListenPort           `json:"ports"`
-	Containers []ContainerPort        `json:"containers"`
+	Containers []Container            `json:"containers"`
+	Services   []SwarmServicePort     `json:"services"`
 	Forwards   []parser.ForwardAction `json:"forwards"`
 	ProxyRules []parser.ProxyRule     `json:"proxy_rules,omitempty"`
 }
@@ -106,6 +107,7 @@ func marshalSnapshotPayload(snapshot NodeSnapshot) (string, error) {
 	payload := snapshotPayload{
 		Ports:      snapshot.Ports,
 		Containers: snapshot.Containers,
+		Services:   snapshot.Services,
 		Forwards:   snapshot.Forwards,
 	}
 	data, err := json.Marshal(payload)
@@ -125,6 +127,7 @@ func unmarshalSnapshotPayload(raw string, snapshot *NodeSnapshot) error {
 	}
 	snapshot.Ports = payload.Ports
 	snapshot.Containers = payload.Containers
+	snapshot.Services = payload.Services
 	snapshot.Forwards = payload.Forwards
 	if len(snapshot.Forwards) == 0 && len(payload.ProxyRules) > 0 {
 		snapshot.Forwards = make([]parser.ForwardAction, 0, len(payload.ProxyRules))

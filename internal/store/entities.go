@@ -17,14 +17,38 @@ type ListenPort struct {
 	Process string  `json:"process"`
 }
 
-// ContainerPort describes one published container port mapping.
-type ContainerPort struct {
-	ID            core.ID `json:"id,omitempty"`
-	ContainerID   string  `json:"container_id"`
-	ContainerName string  `json:"container_name"`
-	HostPort      uint16  `json:"host_port"`
-	ContainerPort uint16  `json:"container_port"`
-	Proto         string  `json:"proto"`
+// ContainerPublishedPort describes one host-visible port associated with a
+// local Docker container. Source distinguishes direct container publishes from
+// publishes inherited from a Swarm service definition.
+type ContainerPublishedPort struct {
+	HostPort   uint16 `json:"host_port"`
+	TargetPort uint16 `json:"target_port"`
+	Proto      string `json:"proto"`
+	Source     string `json:"source"`
+	Mode       string `json:"mode,omitempty"`
+}
+
+// Container describes one local Docker container observed on a node.
+type Container struct {
+	ID             core.ID                  `json:"id,omitempty"`
+	ContainerID    string                   `json:"container_id"`
+	ContainerName  string                   `json:"container_name"`
+	Image          string                   `json:"image"`
+	State          string                   `json:"state"`
+	Status         string                   `json:"status"`
+	ServiceName    string                   `json:"service_name,omitempty"`
+	PublishedPorts []ContainerPublishedPort `json:"published_ports"`
+}
+
+// SwarmServicePort describes one published Docker Swarm service port mapping.
+type SwarmServicePort struct {
+	ID          core.ID `json:"id,omitempty"`
+	ServiceID   string  `json:"service_id"`
+	ServiceName string  `json:"service_name"`
+	HostPort    uint16  `json:"host_port"`
+	TargetPort  uint16  `json:"target_port"`
+	Proto       string  `json:"proto"`
+	Mode        string  `json:"mode,omitempty"`
 }
 
 // CollectionRun groups all snapshots collected in one cycle.
@@ -42,9 +66,11 @@ type NodeSnapshot struct {
 	RunID       core.ID                `json:"run_id" db:"run_id"`
 	NodeName    core.NodeName          `json:"node_name" db:"node_name"`
 	TailscaleIP string                 `json:"tailscale_ip" db:"tailscale_ip"`
+	DNSName     string                 `json:"dns_name" db:"dns_name"`
 	CollectedAt core.Timestamp         `json:"collected_at" db:"collected_at"`
 	Ports       []ListenPort           `json:"ports"`
-	Containers  []ContainerPort        `json:"containers"`
+	Containers  []Container            `json:"containers"`
+	Services    []SwarmServicePort     `json:"services"`
 	Forwards    []parser.ForwardAction `json:"forwards"`
 	Error       string                 `json:"error,omitempty" db:"error"`
 }
@@ -55,24 +81,28 @@ type EdgeKind string
 const (
 	EdgeKindProxyPass        EdgeKind = "proxy_pass"
 	EdgeKindContainerPublish EdgeKind = "container_publish"
+	EdgeKindServicePublish   EdgeKind = "service_publish"
 	EdgeKindDirect           EdgeKind = "direct"
 )
 
 // TopologyEdge is one directed connection in the resolved graph.
 type TopologyEdge struct {
-	ID            core.ID       `json:"id" db:"id"`
-	RunID         core.ID       `json:"run_id" db:"run_id"`
-	FromNode      core.NodeName `json:"from_node" db:"from_node"`
-	FromPort      uint16        `json:"from_port" db:"from_port"`
-	FromProcess   string        `json:"from_process" db:"from_process"`
-	FromContainer string        `json:"from_container" db:"from_container"`
-	ToNode        core.NodeName `json:"to_node" db:"to_node"`
-	ToPort        uint16        `json:"to_port" db:"to_port"`
-	ToProcess     string        `json:"to_process" db:"to_process"`
-	ToContainer   string        `json:"to_container" db:"to_container"`
-	Kind          EdgeKind      `json:"kind" db:"kind"`
-	Resolved      bool          `json:"resolved" db:"resolved"`
-	RawUpstream   string        `json:"raw_upstream" db:"raw_upstream"`
+	ID                 core.ID       `json:"id" db:"id"`
+	RunID              core.ID       `json:"run_id" db:"run_id"`
+	FromNode           core.NodeName `json:"from_node" db:"from_node"`
+	FromPort           uint16        `json:"from_port" db:"from_port"`
+	FromProcess        string        `json:"from_process" db:"from_process"`
+	FromContainer      string        `json:"from_container" db:"from_container"`
+	ToNode             core.NodeName `json:"to_node" db:"to_node"`
+	ToPort             uint16        `json:"to_port" db:"to_port"`
+	ToProcess          string        `json:"to_process" db:"to_process"`
+	ToContainer        string        `json:"to_container" db:"to_container"`
+	ToService          string        `json:"to_service" db:"to_service"`
+	ToRuntimeNode      core.NodeName `json:"to_runtime_node,omitempty" db:"to_runtime_node"`
+	ToRuntimeContainer string        `json:"to_runtime_container,omitempty" db:"to_runtime_container"`
+	Kind               EdgeKind      `json:"kind" db:"kind"`
+	Resolved           bool          `json:"resolved" db:"resolved"`
+	RawUpstream        string        `json:"raw_upstream" db:"raw_upstream"`
 }
 
 // SnapshotStore provides CRUD and query operations for node snapshots.

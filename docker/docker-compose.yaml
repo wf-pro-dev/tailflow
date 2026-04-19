@@ -21,6 +21,17 @@ services:
     volumes:
       - tailflow-data:/var/lib/tailflow
 
+  tailflow-ui:
+    build:
+      context: ..
+      dockerfile: docker/build/Dockerfile.ui
+    networks:
+      - tailflow-net
+    container_name: tailflow-ui
+    restart: unless-stopped
+    ports:
+      - "${TAILFLOW_UI_PORT:-3000}:80"
+
 volumes:
   tailflow-data:
 

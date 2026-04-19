@@ -52,6 +52,60 @@ func TestListNodes(t *testing.T) {
 	}
 }
 
+func TestListNodesIncludesSeparateCollectorAndWorkloadDegradation(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	if err := deps.snapshots.Save(context.Background(), store.NodeSnapshot{
+		ID:          "snap-1",
+		RunID:       "run-1",
+		NodeName:    "node-a",
+		TailscaleIP: "100.64.0.1",
+		CollectedAt: core.NowTimestamp(),
+		Containers: []store.Container{{
+			ContainerID:   "container-1",
+			ContainerName: "api",
+			State:         "running",
+			Status:        "Up 2 hours (unhealthy)",
+			PublishedPorts: []store.ContainerPublishedPort{{
+				HostPort:   8080,
+				TargetPort: 8080,
+				Proto:      "tcp",
+				Source:     "container",
+			}},
+		}},
+	}); err != nil {
+		t.Fatalf("save snapshot: %v", err)
+	}
+
+	handler := newHandlerForTest(deps, fakeCollectorReader{statuses: []collector.NodeStatus{{
+		NodeName:   "node-a",
+		Online:     true,
+		LastSeenAt: core.NowTimestamp(),
+	}}})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"collector_degraded":false`) {
+		t.Fatalf("body = %s", body)
+	}
+	if !strings.Contains(body, `"workload_degraded":true`) {
+		t.Fatalf("body = %s", body)
+	}
+	if !strings.Contains(body, `"degraded":true`) {
+		t.Fatalf("body = %s", body)
+	}
+	if !strings.Contains(body, `container api is unhealthy`) {
+		t.Fatalf("body = %s", body)
+	}
+}
+
 func TestTriggerRun(t *testing.T) {
 	t.Parallel()
 
@@ -325,6 +379,61 @@ func TestHealth(t *testing.T) {
 	}
 	if health.Status != "degraded" {
 		t.Fatalf("health.Status = %s, want degraded", health.Status)
+	}
+	if health.CollectorDegradedNodeCount != 1 || health.WorkloadDegradedNodeCount != 0 {
+		t.Fatalf("health = %#v, want collector degraded count only", health)
+	}
+}
+
+func TestHealthDegradesForWorkloadIssues(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	if err := deps.runs.Save(context.Background(), store.CollectionRun{
+		ID:         "run-1",
+		FinishedAt: core.NowTimestamp(),
+	}); err != nil {
+		t.Fatalf("save run: %v", err)
+	}
+	if err := deps.snapshots.Save(context.Background(), store.NodeSnapshot{
+		ID:          "snap-1",
+		RunID:       "run-1",
+		NodeName:    "node-a",
+		TailscaleIP: "100.64.0.1",
+		CollectedAt: core.NowTimestamp(),
+		Containers: []store.Container{{
+			ContainerID:   "container-1",
+			ContainerName: "api",
+			State:         "running",
+			Status:        "Up 2 hours (unhealthy)",
+			PublishedPorts: []store.ContainerPublishedPort{{
+				HostPort:   8080,
+				TargetPort: 8080,
+				Proto:      "tcp",
+				Source:     "container",
+			}},
+		}},
+	}); err != nil {
+		t.Fatalf("save snapshot: %v", err)
+	}
+	handler := newHandlerForTest(deps, fakeCollectorReader{statuses: []collector.NodeStatus{{NodeName: "node-a"}}})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var health HealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &health); err != nil {
+		t.Fatalf("decode health: %v", err)
+	}
+	if health.Status != "degraded" {
+		t.Fatalf("health.Status = %s, want degraded", health.Status)
+	}
+	if health.CollectorDegradedNodeCount != 0 || health.WorkloadDegradedNodeCount != 1 {
+		t.Fatalf("health = %#v, want workload degraded count only", health)
 	}
 }
 

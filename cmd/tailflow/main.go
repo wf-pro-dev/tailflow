@@ -74,6 +74,7 @@ func run(ctx context.Context, cfg config) error {
 	bus := core.NewEventBus()
 	parsers := parser.NewRegistry()
 	collectorSvc := collector.NewCollector(ts, sqliteStore.Runs(), sqliteStore.Snapshots(), sqliteStore.ProxyConfigs(), bus, parsers)
+	collectorSvc.SetNodeTimeout(cfg.NodeTimeout)
 	resolverSvc := resolver.NewResolver(sqliteStore.Edges(), sqliteStore.Snapshots(), bus)
 	schedulerSvc := scheduler.NewScheduler(
 		scheduler.SchedulerConfig{
@@ -96,8 +97,13 @@ func run(ctx context.Context, cfg config) error {
 		bus,
 		parsers,
 	)
+	httpHandler := withCORS(apiHandler)
+	httpServer := &http.Server{
+		Addr:    cfg.ListenAddr,
+		Handler: httpHandler,
+	}
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	go func() {
 		if err := schedulerSvc.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			errCh <- err
@@ -105,14 +111,26 @@ func run(ctx context.Context, cfg config) error {
 	}()
 
 	go func() {
+		log.Printf("tailflow: serving on http %s", cfg.ListenAddr)
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+	}()
+
+	go func() {
 		log.Printf("tailflow: serving on tailnet %s%s", cfg.Hostname, cfg.ListenAddr)
-		if err := ts.ListenAndServeTLS(cfg.ListenAddr, withCORS(apiHandler)); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := ts.ListenAndServe(cfg.ListenAddr, httpHandler); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()
 
 	select {
 	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
 		return ctx.Err()
 	case err := <-errCh:
 		return err

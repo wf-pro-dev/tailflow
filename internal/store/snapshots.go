@@ -42,6 +42,7 @@ func (s *sqliteSnapshotStore) Save(ctx context.Context, snapshot NodeSnapshot) e
 		RunID:       string(snapshot.RunID),
 		NodeName:    string(snapshot.NodeName),
 		TailscaleIP: snapshot.TailscaleIP,
+		DNSName:     snapshot.DNSName,
 		CollectedAt: timestampToTime(snapshot.CollectedAt),
 		RawJSON:     rawJSON,
 		Error:       snapshot.Error,
@@ -70,21 +71,6 @@ func (s *sqliteSnapshotStore) Save(ctx context.Context, snapshot NodeSnapshot) e
 				Process:    port.Process,
 			}).Error; err != nil {
 				return fmt.Errorf("save listen port: %w", err)
-			}
-		}
-
-		for _, port := range snapshot.Containers {
-			if err := tx.Create(&ContainerPortModel{
-				ID:            string(ensureID(port.ID)),
-				SnapshotID:    model.ID,
-				NodeName:      model.NodeName,
-				ContainerID:   port.ContainerID,
-				ContainerName: port.ContainerName,
-				HostPort:      port.HostPort,
-				ContainerPort: port.ContainerPort,
-				Proto:         port.Proto,
-			}).Error; err != nil {
-				return fmt.Errorf("save container port: %w", err)
 			}
 		}
 
@@ -146,6 +132,7 @@ func snapshotFromModel(model NodeSnapshotModel) (NodeSnapshot, error) {
 		RunID:       core.ID(model.RunID),
 		NodeName:    core.NodeName(model.NodeName),
 		TailscaleIP: model.TailscaleIP,
+		DNSName:     model.DNSName,
 		CollectedAt: timeToTimestamp(model.CollectedAt),
 		Error:       model.Error,
 	}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -15,7 +17,12 @@ import (
 	"github.com/wf-pro-dev/tailflow/internal/resolver"
 	"github.com/wf-pro-dev/tailflow/internal/sse"
 	"github.com/wf-pro-dev/tailflow/internal/store"
+	"github.com/wf-pro-dev/tailkit"
 )
+
+func Init() {
+	tailkit.TTL = 10 * time.Second
+}
 
 type runStore interface {
 	store.RunStore
@@ -109,18 +116,23 @@ func (h *Handler) routes() {
 }
 
 type NodeResponse struct {
-	Name        core.NodeName    `json:"name"`
-	TailscaleIP string           `json:"tailscale_ip"`
-	Online      bool             `json:"online"`
-	Degraded    bool             `json:"degraded"`
-	LastSeenAt  core.Timestamp   `json:"last_seen_at"`
-	Snapshot    *SnapshotSummary `json:"snapshot,omitempty"`
+	Name              core.NodeName    `json:"name"`
+	TailscaleIP       string           `json:"tailscale_ip"`
+	Online            bool             `json:"online"`
+	Degraded          bool             `json:"degraded"`
+	CollectorDegraded bool             `json:"collector_degraded"`
+	WorkloadDegraded  bool             `json:"workload_degraded"`
+	LastSeenAt        core.Timestamp   `json:"last_seen_at"`
+	CollectorError    string           `json:"collector_error,omitempty"`
+	WorkloadIssues    []string         `json:"workload_issues,omitempty"`
+	Snapshot          *SnapshotSummary `json:"snapshot,omitempty"`
 }
 
 type SnapshotSummary struct {
 	CollectedAt    core.Timestamp `json:"collected_at"`
 	PortCount      int            `json:"port_count"`
 	ContainerCount int            `json:"container_count"`
+	ServiceCount   int            `json:"service_count"`
 	ForwardCount   int            `json:"forward_count"`
 }
 
@@ -132,11 +144,17 @@ type TopologyResponse struct {
 }
 
 type TopologyNode struct {
-	Name        core.NodeName         `json:"name"`
-	TailscaleIP string                `json:"tailscale_ip"`
-	Online      bool                  `json:"online"`
-	Ports       []store.ListenPort    `json:"ports"`
-	Containers  []store.ContainerPort `json:"containers"`
+	Name              core.NodeName            `json:"name"`
+	TailscaleIP       string                   `json:"tailscale_ip"`
+	Online            bool                     `json:"online"`
+	Degraded          bool                     `json:"degraded"`
+	CollectorDegraded bool                     `json:"collector_degraded"`
+	WorkloadDegraded  bool                     `json:"workload_degraded"`
+	CollectorError    string                   `json:"collector_error,omitempty"`
+	WorkloadIssues    []string                 `json:"workload_issues,omitempty"`
+	Ports             []store.ListenPort       `json:"ports"`
+	Containers        []store.Container        `json:"containers"`
+	Services          []store.SwarmServicePort `json:"services"`
 }
 
 type SetProxyConfigRequest struct {
@@ -160,10 +178,105 @@ type TriggerRunResponse struct {
 }
 
 type HealthResponse struct {
-	Status    string         `json:"status"`
-	NodeCount int            `json:"node_count"`
-	LastRunAt core.Timestamp `json:"last_run_at"`
-	TailnetIP string         `json:"tailnet_ip"`
+	Status                     string         `json:"status"`
+	NodeCount                  int            `json:"node_count"`
+	CollectorDegradedNodeCount int            `json:"collector_degraded_node_count"`
+	WorkloadDegradedNodeCount  int            `json:"workload_degraded_node_count"`
+	LastRunAt                  core.Timestamp `json:"last_run_at"`
+	TailnetIP                  string         `json:"tailnet_ip"`
+}
+
+type workloadAssessment struct {
+	Degraded bool
+	Issues   []string
+}
+
+func assessWorkload(snapshot store.NodeSnapshot) workloadAssessment {
+	issues := make([]string, 0)
+	for _, container := range snapshot.Containers {
+		if issue, ok := assessContainerWorkload(container); ok {
+			issues = append(issues, issue)
+		}
+	}
+	return workloadAssessment{
+		Degraded: len(issues) > 0,
+		Issues:   issues,
+	}
+}
+
+func assessContainerWorkload(container store.Container) (string, bool) {
+	state := strings.ToLower(strings.TrimSpace(container.State))
+	status := strings.ToLower(strings.TrimSpace(container.Status))
+	name := container.ContainerName
+
+	if strings.Contains(status, "unhealthy") {
+		return fmt.Sprintf("container %s is unhealthy", name), true
+	}
+
+	if container.ServiceName != "" {
+		return "", false
+	}
+	if len(container.PublishedPorts) == 0 {
+		return "", false
+	}
+
+	switch state {
+	case "", "running":
+		return "", false
+	default:
+		return fmt.Sprintf("container %s is %s", name, container.State), true
+	}
+}
+
+func (h *Handler) buildNodeResponse(ctx context.Context, status collector.NodeStatus) NodeResponse {
+	node := NodeResponse{
+		Name:              status.NodeName,
+		Online:            status.Online,
+		Degraded:          status.Degraded,
+		CollectorDegraded: status.Degraded,
+		LastSeenAt:        status.LastSeenAt,
+		CollectorError:    status.LastError,
+	}
+	if h.snapshots == nil {
+		return node
+	}
+
+	snapshot, err := h.snapshots.LatestByNode(ctx, status.NodeName)
+	if err != nil {
+		return node
+	}
+
+	node.TailscaleIP = snapshot.TailscaleIP
+	node.Snapshot = &SnapshotSummary{
+		CollectedAt:    snapshot.CollectedAt,
+		PortCount:      len(snapshot.Ports),
+		ContainerCount: len(snapshot.Containers),
+		ServiceCount:   len(snapshot.Services),
+		ForwardCount:   len(snapshot.Forwards),
+	}
+
+	workload := assessWorkload(snapshot)
+	node.WorkloadDegraded = workload.Degraded
+	node.WorkloadIssues = workload.Issues
+	node.Degraded = node.Degraded || workload.Degraded
+	return node
+}
+
+func buildTopologyNode(snapshot store.NodeSnapshot, status collector.NodeStatus) TopologyNode {
+	workload := assessWorkload(snapshot)
+	return TopologyNode{
+		Name:              snapshot.NodeName,
+		TailscaleIP:       snapshot.TailscaleIP,
+		Online:            status.Online,
+		Degraded:          status.Degraded || workload.Degraded,
+		CollectorDegraded: status.Degraded,
+		WorkloadDegraded:  workload.Degraded,
+		CollectorError:    status.LastError,
+		WorkloadIssues:    workload.Issues,
+		Ports:             snapshot.Ports,
+		Containers:        snapshot.Containers,
+		Services:          snapshot.Services,
+	}
 }
 
 func (h *Handler) listNodes(w http.ResponseWriter, r *http.Request) {
@@ -175,24 +288,7 @@ func (h *Handler) listNodes(w http.ResponseWriter, r *http.Request) {
 
 	nodes := make([]NodeResponse, 0, len(statuses))
 	for _, status := range statuses {
-		node := NodeResponse{
-			Name:       status.NodeName,
-			Online:     status.Online,
-			Degraded:   status.Degraded,
-			LastSeenAt: status.LastSeenAt,
-		}
-		if h.snapshots != nil {
-			if snapshot, err := h.snapshots.LatestByNode(r.Context(), status.NodeName); err == nil {
-				node.TailscaleIP = snapshot.TailscaleIP
-				node.Snapshot = &SnapshotSummary{
-					CollectedAt:    snapshot.CollectedAt,
-					PortCount:      len(snapshot.Ports),
-					ContainerCount: len(snapshot.Containers),
-					ForwardCount:   len(snapshot.Forwards),
-				}
-			}
-		}
-		nodes = append(nodes, node)
+		nodes = append(nodes, h.buildNodeResponse(r.Context(), status))
 	}
 
 	writeJSON(w, http.StatusOK, nodes)
@@ -210,22 +306,7 @@ func (h *Handler) getNode(w http.ResponseWriter, r *http.Request) {
 		if status.NodeName != name {
 			continue
 		}
-		node := NodeResponse{
-			Name:       status.NodeName,
-			Online:     status.Online,
-			Degraded:   status.Degraded,
-			LastSeenAt: status.LastSeenAt,
-		}
-		if snapshot, err := h.snapshots.LatestByNode(r.Context(), name); err == nil {
-			node.TailscaleIP = snapshot.TailscaleIP
-			node.Snapshot = &SnapshotSummary{
-				CollectedAt:    snapshot.CollectedAt,
-				PortCount:      len(snapshot.Ports),
-				ContainerCount: len(snapshot.Containers),
-				ForwardCount:   len(snapshot.Forwards),
-			}
-		}
-		writeJSON(w, http.StatusOK, node)
+		writeJSON(w, http.StatusOK, h.buildNodeResponse(r.Context(), status))
 		return
 	}
 
@@ -259,6 +340,7 @@ func (h *Handler) getTopology(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err, "failed to load topology edges")
 		return
 	}
+	edges = visibleTopologyEdges(edges)
 
 	statusByName := make(map[core.NodeName]collector.NodeStatus)
 	if statuses, err := h.collector.GetStatus(r.Context()); err == nil {
@@ -269,14 +351,7 @@ func (h *Handler) getTopology(w http.ResponseWriter, r *http.Request) {
 
 	nodes := make([]TopologyNode, 0, len(snapshots))
 	for _, snapshot := range snapshots {
-		status := statusByName[snapshot.NodeName]
-		nodes = append(nodes, TopologyNode{
-			Name:        snapshot.NodeName,
-			TailscaleIP: snapshot.TailscaleIP,
-			Online:      status.Online,
-			Ports:       snapshot.Ports,
-			Containers:  snapshot.Containers,
-		})
+		nodes = append(nodes, buildTopologyNode(snapshot, statusByName[snapshot.NodeName]))
 	}
 
 	writeJSON(w, http.StatusOK, TopologyResponse{
@@ -293,7 +368,7 @@ func (h *Handler) listEdges(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err, "failed to load edges")
 		return
 	}
-	writeJSON(w, http.StatusOK, edges)
+	writeJSON(w, http.StatusOK, visibleTopologyEdges(edges))
 }
 
 func (h *Handler) listUnresolvedEdges(w http.ResponseWriter, r *http.Request) {
@@ -302,7 +377,7 @@ func (h *Handler) listUnresolvedEdges(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err, "failed to load unresolved edges")
 		return
 	}
-	writeJSON(w, http.StatusOK, edges)
+	writeJSON(w, http.StatusOK, visibleTopologyEdges(edges))
 }
 
 func (h *Handler) listRuns(w http.ResponseWriter, r *http.Request) {
@@ -333,6 +408,7 @@ func (h *Handler) listRunSnapshots(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) triggerRun(w http.ResponseWriter, r *http.Request) {
+	log.Printf("api: run trigger requested remote=%s", r.RemoteAddr)
 	if h.scheduler != nil {
 		h.scheduler.Trigger()
 	}
@@ -457,10 +533,16 @@ func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
 
 	health := HealthResponse{Status: "ok", NodeCount: len(statuses)}
 	for _, status := range statuses {
-		if status.Degraded {
-			health.Status = "degraded"
-			break
+		node := h.buildNodeResponse(r.Context(), status)
+		if node.CollectorDegraded {
+			health.CollectorDegradedNodeCount++
 		}
+		if node.WorkloadDegraded {
+			health.WorkloadDegradedNodeCount++
+		}
+	}
+	if health.CollectorDegradedNodeCount > 0 || health.WorkloadDegradedNodeCount > 0 {
+		health.Status = "degraded"
 	}
 	if run, err := h.runs.Latest(r.Context()); err == nil {
 		health.LastRunAt = run.FinishedAt
@@ -572,24 +654,7 @@ func (h *Handler) sendInitialNodeSnapshot(ctx context.Context, writer *sse.Write
 
 	nodes := make([]NodeResponse, 0, len(statuses))
 	for _, status := range statuses {
-		node := NodeResponse{
-			Name:       status.NodeName,
-			Online:     status.Online,
-			Degraded:   status.Degraded,
-			LastSeenAt: status.LastSeenAt,
-		}
-		if h.snapshots != nil {
-			if snapshot, err := h.snapshots.LatestByNode(ctx, status.NodeName); err == nil {
-				node.TailscaleIP = snapshot.TailscaleIP
-				node.Snapshot = &SnapshotSummary{
-					CollectedAt:    snapshot.CollectedAt,
-					PortCount:      len(snapshot.Ports),
-					ContainerCount: len(snapshot.Containers),
-					ForwardCount:   len(snapshot.Forwards),
-				}
-			}
-		}
-		nodes = append(nodes, node)
+		nodes = append(nodes, h.buildNodeResponse(ctx, status))
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Name < nodes[j].Name })
 	return writer.Send("nodes.snapshot", nodes)
@@ -615,6 +680,7 @@ func (h *Handler) sendInitialTopologySnapshot(ctx context.Context, writer *sse.W
 		writer.Error(err.Error())
 		return err
 	}
+	edges = visibleTopologyEdges(edges)
 
 	statusByName := make(map[core.NodeName]collector.NodeStatus)
 	if h.collector != nil {
@@ -627,14 +693,7 @@ func (h *Handler) sendInitialTopologySnapshot(ctx context.Context, writer *sse.W
 
 	nodes := make([]TopologyNode, 0, len(snapshots))
 	for _, snapshot := range snapshots {
-		status := statusByName[snapshot.NodeName]
-		nodes = append(nodes, TopologyNode{
-			Name:        snapshot.NodeName,
-			TailscaleIP: snapshot.TailscaleIP,
-			Online:      status.Online,
-			Ports:       snapshot.Ports,
-			Containers:  snapshot.Containers,
-		})
+		nodes = append(nodes, buildTopologyNode(snapshot, statusByName[snapshot.NodeName]))
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Name < nodes[j].Name })
 
@@ -644,6 +703,20 @@ func (h *Handler) sendInitialTopologySnapshot(ctx context.Context, writer *sse.W
 		Edges:     edges,
 		UpdatedAt: run.FinishedAt,
 	})
+}
+
+func visibleTopologyEdges(edges []store.TopologyEdge) []store.TopologyEdge {
+	if len(edges) == 0 {
+		return edges
+	}
+	filtered := make([]store.TopologyEdge, 0, len(edges))
+	for _, edge := range edges {
+		if edge.Kind == store.EdgeKindServicePublish {
+			continue
+		}
+		filtered = append(filtered, edge)
+	}
+	return filtered
 }
 
 func merge(ctx context.Context, channels ...<-chan any) <-chan any {

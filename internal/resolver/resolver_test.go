@@ -18,12 +18,21 @@ func TestBuildIndexAndResolveTarget(t *testing.T) {
 			NodeName:    "node-a",
 			TailscaleIP: "100.64.0.1",
 			Ports:       []store.ListenPort{{Port: 8080, Process: "api"}},
-			Containers:  []store.ContainerPort{{HostPort: 8080, ContainerName: "api"}},
+			Containers: []store.Container{{
+				ContainerName: "api",
+				PublishedPorts: []store.ContainerPublishedPort{{
+					HostPort:   8080,
+					TargetPort: 8080,
+					Proto:      "tcp",
+					Source:     "container",
+				}},
+			}},
+			Services: []store.SwarmServicePort{{HostPort: 3000, ServiceName: "unipilot_api"}},
 		},
 		{
 			NodeName:    "node-b",
 			TailscaleIP: "100.64.0.2",
-			Ports:       []store.ListenPort{{Port: 9090, Process: "worker"}},
+			Ports:       []store.ListenPort{{Addr: "192.168.1.20", Port: 9090, Process: "worker"}},
 		},
 	}
 	index := BuildIndex(snapshots)
@@ -36,7 +45,9 @@ func TestBuildIndexAndResolveTarget(t *testing.T) {
 		wantOK   bool
 	}{
 		{"tailscale ip", parser.ForwardTarget{Kind: parser.TargetKindAddress, Host: "100.64.0.2", Port: 9090}, "node-b", 9090, true},
+		{"lan ip", parser.ForwardTarget{Kind: parser.TargetKindAddress, Host: "192.168.1.20", Port: 9090}, "node-b", 9090, true},
 		{"container name", parser.ForwardTarget{Kind: parser.TargetKindAddress, Host: "api", Port: 8080}, "node-a", 8080, true},
+		{"service name", parser.ForwardTarget{Kind: parser.TargetKindAddress, Host: "unipilot_api", Port: 3000}, "node-a", 3000, true},
 		{"unknown", parser.ForwardTarget{Kind: parser.TargetKindAddress, Host: "unknown", Port: 8080}, "", 8080, false},
 	}
 
@@ -47,6 +58,49 @@ func TestBuildIndexAndResolveTarget(t *testing.T) {
 				t.Fatalf("ResolveTarget(%#v) = (%q,%d,%t), want (%q,%d,%t)", tt.target, gotNode, gotPort, gotOK, tt.wantNode, tt.wantPort, tt.wantOK)
 			}
 		})
+	}
+}
+
+func TestResolveTargetKnownNodeRequiresAdvertisedPortWhenInventoryExists(t *testing.T) {
+	t.Parallel()
+
+	index := BuildIndex([]store.NodeSnapshot{{
+		NodeName:    "node-b",
+		TailscaleIP: "100.64.0.2",
+		Ports:       []store.ListenPort{{Port: 8080, Process: "worker"}},
+	}})
+
+	gotNode, gotPort, gotOK := ResolveTarget(parser.ForwardTarget{
+		Kind: parser.TargetKindAddress,
+		Host: "100.64.0.2",
+		Port: 9090,
+	}, index)
+	if gotNode != "" || gotPort != 9090 || gotOK {
+		t.Fatalf("ResolveTarget() = (%q,%d,%t), want unresolved target port 9090", gotNode, gotPort, gotOK)
+	}
+}
+
+func TestResolveTargetDoesNotUseGenericDottedHostnameAsAlias(t *testing.T) {
+	t.Parallel()
+
+	index := BuildIndex([]store.NodeSnapshot{
+		{
+			NodeName: "api",
+			Ports:    []store.ListenPort{{Port: 8080, Process: "api"}},
+		},
+		{
+			NodeName: "node-b",
+			Ports:    []store.ListenPort{{Port: 8080, Process: "worker"}},
+		},
+	})
+
+	gotNode, gotPort, gotOK := ResolveTarget(parser.ForwardTarget{
+		Kind: parser.TargetKindAddress,
+		Host: "api.example.com",
+		Port: 8080,
+	}, index)
+	if gotNode != "" || gotPort != 8080 || gotOK {
+		t.Fatalf("ResolveTarget() = (%q,%d,%t), want unresolved dotted hostname", gotNode, gotPort, gotOK)
 	}
 }
 
@@ -111,7 +165,15 @@ func TestResolveRun(t *testing.T) {
 			NodeName:    "node-a",
 			TailscaleIP: "100.64.0.1",
 			Ports:       []store.ListenPort{{Port: 80, Process: "nginx"}},
-			Containers:  []store.ContainerPort{{HostPort: 3000, ContainerPort: 3000, ContainerName: "api"}},
+			Containers: []store.Container{{
+				ContainerName: "api",
+				PublishedPorts: []store.ContainerPublishedPort{{
+					HostPort:   3000,
+					TargetPort: 3000,
+					Proto:      "tcp",
+					Source:     "container",
+				}},
+			}},
 			Forwards: []parser.ForwardAction{{
 				Listener: parser.Listener{Port: 80},
 				Target: parser.ForwardTarget{
@@ -159,25 +221,357 @@ func TestResolveRun(t *testing.T) {
 	}
 }
 
+func TestResolveRunAnnotatesProxyEdgesWithResolvedService(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestStore(t)
+	r := NewResolver(db.Edges(), db.Snapshots(), nil)
+
+	run := store.CollectionRun{ID: "run-1"}
+	snapshots := []store.NodeSnapshot{
+		{
+			ID:          "snap-a",
+			RunID:       "run-1",
+			NodeName:    "node-a",
+			TailscaleIP: "100.64.0.1",
+			Ports:       []store.ListenPort{{Port: 80, Process: "nginx"}},
+			Forwards: []parser.ForwardAction{{
+				Listener: parser.Listener{Port: 80},
+				Target: parser.ForwardTarget{
+					Raw:  "http://100.64.0.2:3000",
+					Kind: parser.TargetKindAddress,
+					Host: "100.64.0.2",
+					Port: 3000,
+				},
+			}},
+		},
+		{
+			ID:          "snap-b",
+			RunID:       "run-1",
+			NodeName:    "node-b",
+			TailscaleIP: "100.64.0.2",
+			Services: []store.SwarmServicePort{{
+				ServiceID:   "svc-1",
+				ServiceName: "unipilot_api",
+				HostPort:    3000,
+				TargetPort:  3000,
+				Proto:       "tcp",
+				Mode:        "ingress",
+			}},
+		},
+	}
+
+	edges, err := r.ResolveRun(ctx, run, snapshots)
+	if err != nil {
+		t.Fatalf("ResolveRun(): %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("len(edges) = %d, want 1", len(edges))
+	}
+
+	proxyEdge := &edges[0]
+	if proxyEdge == nil || !proxyEdge.Resolved || proxyEdge.ToNode != "node-b" || proxyEdge.ToService != "unipilot_api" {
+		t.Fatalf("proxy edge = %#v, want resolved proxy edge to node-b service unipilot_api", proxyEdge)
+	}
+}
+
+func TestResolveRunAnnotatesProxyEdgesWithServiceDerivedWorkerTask(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestStore(t)
+	r := NewResolver(db.Edges(), db.Snapshots(), nil)
+
+	run := store.CollectionRun{ID: "run-1"}
+	snapshots := []store.NodeSnapshot{
+		{
+			ID:       "snap-source",
+			RunID:    "run-1",
+			NodeName: "wwwill-1",
+			Ports:    []store.ListenPort{{Port: 80, Process: "nginx"}},
+			Forwards: []parser.ForwardAction{{
+				Listener: parser.Listener{Port: 80},
+				Target: parser.ForwardTarget{
+					Raw:  "http://unipilot-2.lab:3002",
+					Kind: parser.TargetKindAddress,
+					Host: "unipilot-2.lab",
+					Port: 3002,
+				},
+			}},
+		},
+		{
+			ID:       "snap-target",
+			RunID:    "run-1",
+			NodeName: "unipilot-2",
+			Ports:    []store.ListenPort{{Port: 3002}},
+			Containers: []store.Container{{
+				ContainerName: "unipilot_sse.1.xyz",
+				ServiceName:   "unipilot_sse",
+				State:         "running",
+				PublishedPorts: []store.ContainerPublishedPort{{
+					HostPort:   3002,
+					TargetPort: 3002,
+					Proto:      "tcp",
+					Source:     "service",
+					Mode:       "ingress",
+				}},
+			}},
+		},
+	}
+
+	edges, err := r.ResolveRun(ctx, run, snapshots)
+	if err != nil {
+		t.Fatalf("ResolveRun(): %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("len(edges) = %d, want 1", len(edges))
+	}
+
+	proxyEdge := edges[0]
+	if !proxyEdge.Resolved || proxyEdge.ToNode != "unipilot-2" || proxyEdge.ToService != "unipilot_sse" {
+		t.Fatalf("proxy edge = %#v, want resolved edge to worker service unipilot_sse", proxyEdge)
+	}
+	if proxyEdge.ToContainer != "unipilot_sse.1.xyz" || proxyEdge.ToRuntimeNode != "unipilot-2" || proxyEdge.ToRuntimeContainer != "unipilot_sse.1.xyz" {
+		t.Fatalf("proxy edge runtime = %#v, want local worker task metadata", proxyEdge)
+	}
+}
+
+func TestResolveRunSeparatesReachableServiceFromRemoteRuntimeTask(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestStore(t)
+	r := NewResolver(db.Edges(), db.Snapshots(), nil)
+
+	run := store.CollectionRun{ID: "run-1"}
+	snapshots := []store.NodeSnapshot{
+		{
+			ID:       "snap-source",
+			RunID:    "run-1",
+			NodeName: "wwwill-1",
+			Ports:    []store.ListenPort{{Port: 80, Process: "nginx"}},
+			Forwards: []parser.ForwardAction{{
+				Listener: parser.Listener{Port: 80},
+				Target: parser.ForwardTarget{
+					Raw:  "http://unipilot-1.lab:3002",
+					Kind: parser.TargetKindAddress,
+					Host: "unipilot-1.lab",
+					Port: 3002,
+				},
+			}},
+		},
+		{
+			ID:       "snap-manager",
+			RunID:    "run-1",
+			NodeName: "unipilot-1",
+			Ports:    []store.ListenPort{{Port: 3002}},
+			Services: []store.SwarmServicePort{{
+				ServiceID:   "svc-sse",
+				ServiceName: "unipilot_sse",
+				HostPort:    3002,
+				TargetPort:  3002,
+				Proto:       "tcp",
+				Mode:        "ingress",
+			}},
+		},
+		{
+			ID:       "snap-worker",
+			RunID:    "run-1",
+			NodeName: "unipilot-2",
+			Ports:    []store.ListenPort{{Port: 3002}},
+			Containers: []store.Container{{
+				ContainerName: "unipilot_sse.1.xyz",
+				ServiceName:   "unipilot_sse",
+				State:         "running",
+				PublishedPorts: []store.ContainerPublishedPort{{
+					HostPort:   3002,
+					TargetPort: 3002,
+					Proto:      "tcp",
+					Source:     "service",
+					Mode:       "ingress",
+				}},
+			}},
+		},
+	}
+
+	edges, err := r.ResolveRun(ctx, run, snapshots)
+	if err != nil {
+		t.Fatalf("ResolveRun(): %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("len(edges) = %d, want 1", len(edges))
+	}
+
+	proxyEdge := edges[0]
+	if !proxyEdge.Resolved || proxyEdge.ToNode != "unipilot-1" || proxyEdge.ToService != "unipilot_sse" {
+		t.Fatalf("proxy edge = %#v, want reachable service on unipilot-1", proxyEdge)
+	}
+	if proxyEdge.ToContainer != "" {
+		t.Fatalf("proxy edge ToContainer = %q, want no local task on reachable node", proxyEdge.ToContainer)
+	}
+	if proxyEdge.ToRuntimeNode != "unipilot-2" || proxyEdge.ToRuntimeContainer != "unipilot_sse.1.xyz" {
+		t.Fatalf("proxy edge runtime = (%q,%q), want remote runtime task on unipilot-2", proxyEdge.ToRuntimeNode, proxyEdge.ToRuntimeContainer)
+	}
+}
+
+func TestResolveRunResolvesNodeHostnameAliasWithoutTargetPorts(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestStore(t)
+	r := NewResolver(db.Edges(), db.Snapshots(), nil)
+
+	run := store.CollectionRun{ID: "run-1"}
+	snapshots := []store.NodeSnapshot{
+		{
+			ID:       "snap-source",
+			RunID:    "run-1",
+			NodeName: "wwwill-1",
+			Ports:    []store.ListenPort{{Port: 80, Process: "nginx"}},
+			Forwards: []parser.ForwardAction{{
+				Listener: parser.Listener{Port: 80},
+				Target: parser.ForwardTarget{
+					Raw:  "unipilot-2.lab:3001",
+					Kind: parser.TargetKindAddress,
+					Host: "unipilot-2.lab",
+					Port: 3001,
+				},
+			}},
+		},
+		{
+			ID:          "snap-target",
+			RunID:       "run-1",
+			NodeName:    "unipilot-2",
+			TailscaleIP: "100.74.111.75",
+		},
+	}
+
+	edges, err := r.ResolveRun(ctx, run, snapshots)
+	if err != nil {
+		t.Fatalf("ResolveRun(): %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("len(edges) = %d, want 1", len(edges))
+	}
+	if edges[0].ToNode != "unipilot-2" || edges[0].ToPort != 3001 || !edges[0].Resolved {
+		t.Fatalf("edge = %#v, want resolved edge to unipilot-2:3001", edges[0])
+	}
+}
+
+func TestResolveRunResolvesTailscaleIPWithoutTargetPorts(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestStore(t)
+	r := NewResolver(db.Edges(), db.Snapshots(), nil)
+
+	run := store.CollectionRun{ID: "run-1"}
+	snapshots := []store.NodeSnapshot{
+		{
+			ID:       "snap-source",
+			RunID:    "run-1",
+			NodeName: "wwwill-1",
+			Ports:    []store.ListenPort{{Port: 80, Process: "nginx"}},
+			Forwards: []parser.ForwardAction{{
+				Listener: parser.Listener{Port: 80},
+				Target: parser.ForwardTarget{
+					Raw:  "http://100.104.22.121:5000/",
+					Kind: parser.TargetKindAddress,
+					Host: "100.104.22.121",
+					Port: 5000,
+				},
+			}},
+		},
+		{
+			ID:          "snap-target",
+			RunID:       "run-1",
+			NodeName:    "newsroom-api-1",
+			TailscaleIP: "100.104.22.121",
+		},
+	}
+
+	edges, err := r.ResolveRun(ctx, run, snapshots)
+	if err != nil {
+		t.Fatalf("ResolveRun(): %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("len(edges) = %d, want 1", len(edges))
+	}
+	if edges[0].ToNode != "newsroom-api-1" || edges[0].ToPort != 5000 || !edges[0].Resolved {
+		t.Fatalf("edge = %#v, want resolved edge to newsroom-api-1:5000", edges[0])
+	}
+}
+
+func TestResolveRunResolvesShortTHostAlias(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestStore(t)
+	r := NewResolver(db.Edges(), db.Snapshots(), nil)
+
+	run := store.CollectionRun{ID: "run-1"}
+	snapshots := []store.NodeSnapshot{
+		{
+			ID:       "snap-source",
+			RunID:    "run-1",
+			NodeName: "wwwill-1",
+			Ports:    []store.ListenPort{{Port: 80, Process: "nginx"}},
+			Forwards: []parser.ForwardAction{{
+				Listener: parser.Listener{Port: 80},
+				Target: parser.ForwardTarget{
+					Raw:  "http://warehouse-13-1-t",
+					Kind: parser.TargetKindAddress,
+					Host: "warehouse-13-1-t",
+					Port: 80,
+				},
+			}},
+		},
+		{
+			ID:       "snap-target",
+			RunID:    "run-1",
+			NodeName: "warehouse-13-1",
+			Ports:    []store.ListenPort{{Port: 80, Process: "nginx"}},
+		},
+	}
+
+	edges, err := r.ResolveRun(ctx, run, snapshots)
+	if err != nil {
+		t.Fatalf("ResolveRun(): %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("len(edges) = %d, want 1", len(edges))
+	}
+	if edges[0].ToNode != "warehouse-13-1" || edges[0].ToPort != 80 || !edges[0].Resolved {
+		t.Fatalf("edge = %#v, want resolved edge to warehouse-13-1:80", edges[0])
+	}
+}
+
 func TestResolveContainerEdgesDeduplicatesDuplicateContainerMappings(t *testing.T) {
 	t.Parallel()
 
 	snapshot := store.NodeSnapshot{
 		NodeName: "warehouse-13-1",
-		Containers: []store.ContainerPort{
+		Containers: []store.Container{
 			{
 				ContainerID:   "c1",
 				ContainerName: "devbox-ui",
-				HostPort:      80,
-				ContainerPort: 80,
-				Proto:         "tcp",
+				PublishedPorts: []store.ContainerPublishedPort{{
+					HostPort:   80,
+					TargetPort: 80,
+					Proto:      "tcp",
+					Source:     "container",
+				}},
 			},
 			{
 				ContainerID:   "c1",
 				ContainerName: "devbox-ui",
-				HostPort:      80,
-				ContainerPort: 80,
-				Proto:         "tcp",
+				PublishedPorts: []store.ContainerPublishedPort{{
+					HostPort:   80,
+					TargetPort: 80,
+					Proto:      "tcp",
+					Source:     "container",
+				}},
 			},
 		},
 	}
@@ -238,10 +632,10 @@ func TestResolveSnapshot(t *testing.T) {
 	updatedA.Forwards = []parser.ForwardAction{{
 		Listener: parser.Listener{Port: 80},
 		Target: parser.ForwardTarget{
-			Raw:  "http://100.64.0.2:9090",
+			Raw:  "http://100.64.0.2:8080",
 			Kind: parser.TargetKindAddress,
 			Host: "100.64.0.2",
-			Port: 9090,
+			Port: 8080,
 		},
 	}}
 	if err := db.Snapshots().Save(ctx, updatedA); err != nil {
@@ -255,8 +649,100 @@ func TestResolveSnapshot(t *testing.T) {
 	if len(edges) != 1 {
 		t.Fatalf("len(edges) = %d, want 1", len(edges))
 	}
-	if edges[0].ToPort != 9090 || edges[0].Resolved {
-		t.Fatalf("edge = %#v, want unresolved edge to port 9090", edges[0])
+	if edges[0].ToNode != "node-b" || edges[0].ToPort != 8080 || !edges[0].Resolved {
+		t.Fatalf("edge = %#v, want resolved edge to node-b:8080", edges[0])
+	}
+}
+
+func TestResolveSnapshotUsesSameRunSnapshotsOnly(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestStore(t)
+	r := NewResolver(db.Edges(), db.Snapshots(), nil)
+
+	run1Source := store.NodeSnapshot{
+		ID:          "snap-a1",
+		RunID:       "run-1",
+		NodeName:    "node-a",
+		TailscaleIP: "100.64.0.1",
+		CollectedAt: core.NowTimestamp(),
+		Ports:       []store.ListenPort{{Port: 80, Process: "nginx"}},
+		Forwards: []parser.ForwardAction{{
+			Listener: parser.Listener{Port: 80},
+			Target: parser.ForwardTarget{
+				Raw:  "http://service.internal:9090",
+				Kind: parser.TargetKindAddress,
+				Host: "service.internal",
+				Port: 9090,
+			},
+		}},
+	}
+	run1Peer := store.NodeSnapshot{
+		ID:          "snap-b1",
+		RunID:       "run-1",
+		NodeName:    "node-b",
+		TailscaleIP: "100.64.0.2",
+		CollectedAt: core.NowTimestamp(),
+		Ports:       []store.ListenPort{{Port: 8080, Process: "app"}},
+	}
+	run2Peer := store.NodeSnapshot{
+		ID:          "snap-c1",
+		RunID:       "run-2",
+		NodeName:    "node-c",
+		TailscaleIP: "100.64.0.3",
+		CollectedAt: core.NowTimestamp(),
+		Ports:       []store.ListenPort{{Port: 9090, Process: "app"}},
+	}
+
+	for _, snapshot := range []store.NodeSnapshot{run1Source, run1Peer, run2Peer} {
+		if err := db.Snapshots().Save(ctx, snapshot); err != nil {
+			t.Fatalf("save snapshot: %v", err)
+		}
+	}
+	if _, err := r.ResolveRun(ctx, store.CollectionRun{ID: "run-1"}, []store.NodeSnapshot{run1Source, run1Peer}); err != nil {
+		t.Fatalf("ResolveRun(): %v", err)
+	}
+
+	updatedSource := run1Source
+	updatedSource.ID = "snap-a2"
+	updatedSource.CollectedAt = core.NowTimestamp()
+	if err := db.Snapshots().Save(ctx, updatedSource); err != nil {
+		t.Fatalf("save updated snapshot: %v", err)
+	}
+
+	edges, err := r.ResolveSnapshot(ctx, updatedSource)
+	if err != nil {
+		t.Fatalf("ResolveSnapshot(): %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("len(edges) = %d, want 1", len(edges))
+	}
+	if edges[0].Resolved || edges[0].ToNode != "" || edges[0].ToPort != 9090 {
+		t.Fatalf("edge = %#v, want unresolved edge that ignores run-2 snapshots", edges[0])
+	}
+}
+
+func TestTargetMetadataPrefersContainer(t *testing.T) {
+	t.Parallel()
+
+	index := BuildIndex([]store.NodeSnapshot{{
+		NodeName: "node-a",
+		Ports:    []store.ListenPort{{Port: 8080, Process: "nginx"}},
+		Containers: []store.Container{{
+			ContainerName: "api",
+			PublishedPorts: []store.ContainerPublishedPort{{
+				HostPort:   8080,
+				TargetPort: 3000,
+				Proto:      "tcp",
+				Source:     "container",
+			}},
+		}},
+	}})
+
+	details := targetMetadata(index, "node-a", 8080)
+	if details.Process != "" || details.Container != "api" || details.Service != "" {
+		t.Fatalf("targetMetadata(...) = %#v, want container-preferred metadata", details)
 	}
 }
 

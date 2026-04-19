@@ -15,6 +15,7 @@ type NodeSnapshotModel struct {
 	RunID       string `gorm:"index;not null"`
 	NodeName    string `gorm:"index;not null"`
 	TailscaleIP string
+	DNSName     string
 	CollectedAt time.Time `gorm:"index"`
 	RawJSON     string    `gorm:"column:raw_json;type:text"`
 	Error       string
@@ -43,19 +44,22 @@ type ContainerPortModel struct {
 }
 
 type TopologyEdgeModel struct {
-	ID            string `gorm:"primaryKey"`
-	RunID         string `gorm:"index;not null"`
-	FromNode      string `gorm:"index"`
-	FromPort      uint16
-	FromProcess   string
-	FromContainer string
-	ToNode        string `gorm:"index"`
-	ToPort        uint16
-	ToProcess     string
-	ToContainer   string
-	Kind          string
-	Resolved      bool `gorm:"index"`
-	RawUpstream   string
+	ID                 string `gorm:"primaryKey"`
+	RunID              string `gorm:"index;not null"`
+	FromNode           string `gorm:"index"`
+	FromPort           uint16
+	FromProcess        string
+	FromContainer      string
+	ToNode             string `gorm:"index"`
+	ToPort             uint16
+	ToProcess          string
+	ToContainer        string
+	ToService          string
+	ToRuntimeNode      string `gorm:"index"`
+	ToRuntimeContainer string
+	Kind               string
+	Resolved           bool `gorm:"index"`
+	RawUpstream        string
 }
 
 type ProxyConfigInputModel struct {

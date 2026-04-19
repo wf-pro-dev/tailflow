@@ -4,21 +4,27 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/swarm"
 	"github.com/wf-pro-dev/tailflow/internal/core"
 	"github.com/wf-pro-dev/tailflow/internal/parser"
 	"github.com/wf-pro-dev/tailflow/internal/store"
 	"github.com/wf-pro-dev/tailkit"
 	tailkittypes "github.com/wf-pro-dev/tailkit/types"
+	integrationsTypes "github.com/wf-pro-dev/tailkit/types/integrations"
 )
 
 const degradeThreshold = 3
+const defaultNodeTimeout = 10 * time.Second
+const localStoreTimeout = 2 * time.Second
 
 // NodeStatus tracks liveness per node between collection cycles.
 type NodeStatus struct {
@@ -65,7 +71,9 @@ type metricsClient interface {
 }
 
 type dockerClient interface {
+	Config(context.Context) (integrationsTypes.DockerConfig, error)
 	Containers(context.Context) ([]container.Summary, error)
+	SwarmServices(context.Context) ([]swarm.Service, error)
 }
 
 type filesClient interface {
@@ -95,8 +103,16 @@ func (m tailkitMetricsClient) StreamPorts(ctx context.Context, fn func(tailkitty
 
 type tailkitDockerClient struct{ docker *tailkit.DockerClient }
 
+func (d tailkitDockerClient) Config(ctx context.Context) (integrationsTypes.DockerConfig, error) {
+	return d.docker.Config(ctx)
+}
+
 func (d tailkitDockerClient) Containers(ctx context.Context) ([]container.Summary, error) {
 	return d.docker.Containers(ctx)
+}
+
+func (d tailkitDockerClient) SwarmServices(ctx context.Context) ([]swarm.Service, error) {
+	return d.docker.Swarm().Services(ctx)
 }
 
 type tailkitFilesClient struct{ files *tailkit.FilesClient }
@@ -124,6 +140,8 @@ type Collector struct {
 	mu       sync.Mutex
 	statuses map[core.NodeName]NodeStatus
 	failures map[core.NodeName]int
+
+	nodeTimeout time.Duration
 }
 
 type proxyConfigFetchResult struct {
@@ -131,6 +149,12 @@ type proxyConfigFetchResult struct {
 	bundle  map[string]string
 	parsed  parser.ParseResult
 	err     error
+}
+
+type collectNodeResult struct {
+	peer     tailkittypes.Peer
+	snapshot store.NodeSnapshot
+	err      error
 }
 
 func NewCollector(
@@ -151,6 +175,7 @@ func NewCollector(
 		discoverPeers: tailkit.OnlinePeers,
 		statuses:      make(map[core.NodeName]NodeStatus),
 		failures:      make(map[core.NodeName]int),
+		nodeTimeout:   defaultNodeTimeout,
 	}
 	c.newNode = func(hostname string) nodeClient {
 		if srv == nil {
@@ -169,46 +194,60 @@ func NewCollector(
 	return c
 }
 
+func (c *Collector) SetNodeTimeout(timeout time.Duration) {
+	if timeout <= 0 {
+		timeout = defaultNodeTimeout
+	}
+	c.nodeTimeout = timeout
+}
+
 // RunOnce executes one collection cycle across all online peers.
 func (c *Collector) RunOnce(ctx context.Context) (store.CollectionRun, error) {
 	run := store.CollectionRun{
 		ID:        core.NewID(),
 		StartedAt: core.NowTimestamp(),
 	}
+	log.Printf("collector: run started id=%s", run.ID)
 
 	peers, err := c.discoverPeers(ctx, c.srv)
 	if err != nil {
+		log.Printf("collector: run failed id=%s stage=discover_peers err=%v", run.ID, err)
 		return run, fmt.Errorf("discover peers: %w", err)
 	}
 	run.NodeCount = len(peers)
 
-	type result struct {
-		peer     tailkittypes.Peer
-		snapshot store.NodeSnapshot
-		err      error
-	}
-
-	results := make(chan result, len(peers))
+	results := make(chan collectNodeResult, len(peers))
 	var wg sync.WaitGroup
 	for _, peer := range peers {
 		peer := peer
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			snapshot, err := c.collectNode(ctx, peer, run.ID)
-			results <- result{peer: peer, snapshot: snapshot, err: err}
+			nodeCtx, cancel := c.nodeContext(ctx)
+			defer cancel()
+			snapshot, err := c.collectNode(nodeCtx, peer, run.ID)
+			results <- collectNodeResult{peer: peer, snapshot: snapshot, err: err}
 		}()
 	}
 
 	wg.Wait()
 	close(results)
 
+	collected := make([]collectNodeResult, 0, len(peers))
+	for res := range results {
+		collected = append(collected, res)
+	}
+	enrichResultsWithSwarmServicePublishes(collected)
+
 	seen := make(map[core.NodeName]struct{}, len(peers))
 	errs := make(map[core.NodeName]error)
-	for res := range results {
+	for _, res := range collected {
 		nodeName := core.NodeName(res.peer.Status.HostName)
 		seen[nodeName] = struct{}{}
-		if saveErr := c.snapshots.Save(ctx, res.snapshot); saveErr != nil {
+		saveCtx, cancelSave := c.localStoreContext(ctx)
+		saveErr := c.snapshots.Save(saveCtx, res.snapshot)
+		cancelSave()
+		if saveErr != nil {
 			errs[nodeName] = fmt.Errorf("save snapshot: %w", saveErr)
 			run.ErrorCount++
 			c.applyCollectionFailure(nodeName, errs[nodeName])
@@ -233,11 +272,21 @@ func (c *Collector) RunOnce(ctx context.Context) (store.CollectionRun, error) {
 
 	run.FinishedAt = core.NowTimestamp()
 	if c.runs != nil {
-		if err := c.runs.Save(ctx, run); err != nil {
+		saveCtx, cancelSave := c.localStoreContext(ctx)
+		err := c.runs.Save(saveCtx, run)
+		cancelSave()
+		if err != nil {
+			log.Printf("collector: run failed id=%s stage=save_run node_count=%d error_count=%d duration=%s err=%v", run.ID, run.NodeCount, run.ErrorCount, run.FinishedAt.Time().Sub(run.StartedAt.Time()), err)
 			return run, fmt.Errorf("save collection run: %w", err)
 		}
 	}
-	return run, core.MergeErrors(errs)
+	mergedErr := core.MergeErrors(errs)
+	if mergedErr != nil {
+		log.Printf("collector: run finished id=%s node_count=%d error_count=%d duration=%s err=%v", run.ID, run.NodeCount, run.ErrorCount, run.FinishedAt.Time().Sub(run.StartedAt.Time()), mergedErr)
+	} else {
+		log.Printf("collector: run finished id=%s node_count=%d error_count=%d duration=%s", run.ID, run.NodeCount, run.ErrorCount, run.FinishedAt.Time().Sub(run.StartedAt.Time()))
+	}
+	return run, mergedErr
 }
 
 // WatchNode patches the latest stored snapshot from the live port stream.
@@ -327,7 +376,10 @@ func (c *Collector) PreviewProxyConfig(ctx context.Context, nodeName core.NodeNa
 		return "", nil, parser.ParseResult{}, fmt.Errorf("tailkit node client unavailable")
 	}
 
-	result := c.readAndParseProxyConfig(ctx, node.Files(), kind, configPath)
+	nodeCtx, cancel := c.nodeContext(ctx)
+	defer cancel()
+
+	result := c.readAndParseProxyConfig(nodeCtx, node.Files(), kind, configPath)
 	return result.content, result.bundle, result.parsed, result.err
 }
 
@@ -338,6 +390,7 @@ func (c *Collector) collectNode(ctx context.Context, peer tailkittypes.Peer, run
 		RunID:       runID,
 		NodeName:    nodeName,
 		TailscaleIP: firstTailscaleIP(peer),
+		DNSName:     normalizeDNSName(peer.Status.DNSName),
 		CollectedAt: core.NowTimestamp(),
 	}
 
@@ -357,16 +410,42 @@ func (c *Collector) collectNode(ctx context.Context, peer tailkittypes.Peer, run
 		snapshot.Ports = mapPorts(ports)
 	}
 
-	containers, err := node.Docker().Containers(ctx)
-	if err != nil && !errors.Is(err, tailkittypes.ErrDockerUnavailable) {
-		partialErrs = append(partialErrs, fmt.Errorf("docker: %w", err))
-	} else if err == nil {
-		snapshot.Containers = mapContainers(containers)
+	dockerEnabled := true
+	swarmReadEnabled := false
+
+	dockerConfig, err := node.Docker().Config(ctx)
+	if err != nil {
+		partialErrs = append(partialErrs, fmt.Errorf("docker config: %w", err))
+	} else {
+		dockerEnabled = dockerConfig.Enabled
+		swarmReadEnabled = dockerConfig.Swarm.Permits("read")
+	}
+
+	if swarmReadEnabled {
+		services, err := node.Docker().SwarmServices(ctx)
+		if err != nil && !errors.Is(err, tailkittypes.ErrDockerUnavailable) {
+			log.Printf("collector: swarm services skipped node=%s err=%v", nodeName, err)
+		} else if err == nil {
+			snapshot.Services = mapSwarmServices(services)
+		}
+	}
+
+	if dockerEnabled {
+		containers, err := node.Docker().Containers(ctx)
+		if err != nil && !errors.Is(err, tailkittypes.ErrDockerUnavailable) {
+			partialErrs = append(partialErrs, fmt.Errorf("docker: %w", err))
+		} else if err == nil {
+			snapshot.Containers = mapContainers(containers, snapshot.Services)
+		}
 	}
 
 	if c.proxyConfigs != nil {
-		configs, err := c.proxyConfigs.ListByNode(ctx, nodeName)
-		if err == nil {
+		storeCtx, cancelStore := c.localStoreContext(ctx)
+		configs, err := c.proxyConfigs.ListByNode(storeCtx, nodeName)
+		cancelStore()
+		if err != nil {
+			partialErrs = append(partialErrs, fmt.Errorf("proxy config store: %w", err))
+		} else {
 			allForwards := make([]parser.ForwardAction, 0)
 			for _, config := range configs {
 				result := c.readAndParseProxyConfig(ctx, node.Files(), config.Kind, config.ConfigPath)
@@ -389,6 +468,25 @@ func (c *Collector) collectNode(ctx context.Context, peer tailkittypes.Peer, run
 	return snapshot, merged
 }
 
+func (c *Collector) localStoreContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	base := context.Background()
+	if ctx != nil {
+		base = context.WithoutCancel(ctx)
+	}
+	return context.WithTimeout(base, localStoreTimeout)
+}
+
+func (c *Collector) nodeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	base := ctx
+	if base == nil {
+		base = context.Background()
+	}
+	if c.nodeTimeout <= 0 {
+		return base, func() {}
+	}
+	return context.WithTimeout(base, c.nodeTimeout)
+}
+
 func (c *Collector) readAndParseProxyConfig(ctx context.Context, files filesClient, kind string, configPath string) proxyConfigFetchResult {
 	content, err := files.Read(ctx, configPath)
 	if err != nil {
@@ -399,7 +497,7 @@ func (c *Collector) readAndParseProxyConfig(ctx context.Context, files filesClie
 
 	bundle := map[string]string{configPath: content}
 	if strings.EqualFold(kind, "nginx") {
-		bundle, err = c.fetchNginxConfigBundle(ctx, files, configPath)
+		bundle, err = c.fetchNginxConfigBundle(ctx, files, configPath, content)
 		if err != nil {
 			return proxyConfigFetchResult{
 				content: content,
@@ -426,11 +524,24 @@ func (c *Collector) readAndParseProxyConfig(ctx context.Context, files filesClie
 	}
 }
 
-func (c *Collector) fetchNginxConfigBundle(ctx context.Context, files filesClient, mainPath string) (map[string]string, error) {
-	bundle := make(map[string]string)
-	visiting := make(map[string]struct{})
-	if err := c.fetchNginxConfigRecursive(ctx, files, mainPath, bundle, visiting); err != nil {
-		return nil, err
+func (c *Collector) fetchNginxConfigBundle(ctx context.Context, files filesClient, mainPath string, mainContent string) (map[string]string, error) {
+	mainPath = filepath.Clean(mainPath)
+	bundle := map[string]string{mainPath: mainContent}
+
+	includePaths, err := parser.NginxIncludePaths(mainPath, mainContent)
+	if err != nil {
+		return nil, fmt.Errorf("proxy config include parse %s: %w", mainPath, err)
+	}
+	for _, includePath := range includePaths {
+		matches, err := c.expandRemoteIncludePaths(ctx, files, includePath)
+		if err != nil {
+			return nil, err
+		}
+		for _, match := range matches {
+			if err := c.fetchNginxConfigRecursive(ctx, files, match, bundle, make(map[string]struct{})); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return bundle, nil
 }
@@ -531,11 +642,8 @@ func (c *Collector) applyCollectionFailure(nodeName core.NodeName, err error) {
 		NodeName:   nodeName,
 		Online:     true,
 		Degraded:   c.failures[nodeName] >= degradeThreshold,
-		LastSeenAt: previous.LastSeenAt,
+		LastSeenAt: core.NowTimestamp(),
 		LastError:  err.Error(),
-	}
-	if current.LastSeenAt.IsZero() {
-		current.LastSeenAt = core.NowTimestamp()
 	}
 	c.statuses[nodeName] = current
 	c.publishStatusEvent(previous, current)
@@ -589,6 +697,10 @@ func firstTailscaleIP(peer tailkittypes.Peer) string {
 	return peer.Status.TailscaleIPs[0].String()
 }
 
+func normalizeDNSName(value string) string {
+	return strings.TrimSuffix(strings.TrimSpace(value), ".")
+}
+
 func mapPorts(ports []tailkittypes.Port) []store.ListenPort {
 	out := make([]store.ListenPort, 0, len(ports))
 	for _, port := range ports {
@@ -616,23 +728,163 @@ func mapPort(port tailkittypes.Port) store.ListenPort {
 	}
 }
 
-func mapContainers(containers []container.Summary) []store.ContainerPort {
-	out := make([]store.ContainerPort, 0)
-	seen := make(map[string]struct{})
+func mapContainers(containers []container.Summary, services []store.SwarmServicePort) []store.Container {
+	out := make([]store.Container, 0, len(containers))
+	servicePublishesByName := make(map[string][]store.SwarmServicePort)
+	for _, service := range services {
+		if service.ServiceName == "" {
+			continue
+		}
+		key := strings.ToLower(service.ServiceName)
+		servicePublishesByName[key] = append(servicePublishesByName[key], service)
+	}
 	for _, summary := range containers {
+		if strings.EqualFold(string(summary.State), "exited") {
+			continue
+		}
 		name := firstContainerName(summary.Names)
-		for _, port := range summary.Ports {
-			if port.PublicPort == 0 {
+		serviceName := strings.TrimSpace(summary.Labels["com.docker.swarm.service.name"])
+		publishedPorts := mapContainerPublishedPorts(summary, servicePublishesByName[strings.ToLower(serviceName)])
+		out = append(out, store.Container{
+			ContainerID:    summary.ID,
+			ContainerName:  name,
+			Image:          summary.Image,
+			State:          string(summary.State),
+			Status:         summary.Status,
+			ServiceName:    serviceName,
+			PublishedPorts: publishedPorts,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ServiceName != out[j].ServiceName {
+			return out[i].ServiceName < out[j].ServiceName
+		}
+		if out[i].ContainerName != out[j].ContainerName {
+			return out[i].ContainerName < out[j].ContainerName
+		}
+		return out[i].ContainerID < out[j].ContainerID
+	})
+	return out
+}
+
+func enrichResultsWithSwarmServicePublishes(results []collectNodeResult) {
+	servicePublishesByName := make(map[string][]store.SwarmServicePort)
+	seen := make(map[string]struct{})
+	for _, result := range results {
+		for _, service := range result.snapshot.Services {
+			if service.ServiceName == "" {
 				continue
 			}
-			mapped := store.ContainerPort{
-				ContainerID:   summary.ID,
-				ContainerName: name,
-				HostPort:      port.PublicPort,
-				ContainerPort: port.PrivatePort,
-				Proto:         port.Type,
+			serviceNameKey := strings.ToLower(service.ServiceName)
+			serviceKey := serviceNameKey + "|" + swarmServicePortKey(service)
+			if _, ok := seen[serviceKey]; ok {
+				continue
 			}
-			key := containerPortKey(mapped)
+			seen[serviceKey] = struct{}{}
+			servicePublishesByName[serviceNameKey] = append(servicePublishesByName[serviceNameKey], service)
+		}
+	}
+	if len(servicePublishesByName) == 0 {
+		return
+	}
+
+	for i := range results {
+		results[i].snapshot.Containers = mergeContainersWithServicePublishes(results[i].snapshot.Containers, servicePublishesByName)
+	}
+}
+
+func mergeContainersWithServicePublishes(containers []store.Container, servicePublishesByName map[string][]store.SwarmServicePort) []store.Container {
+	if len(containers) == 0 || len(servicePublishesByName) == 0 {
+		return containers
+	}
+
+	out := make([]store.Container, len(containers))
+	for i, container := range containers {
+		merged := container
+		serviceName := strings.ToLower(strings.TrimSpace(container.ServiceName))
+		if serviceName != "" && strings.EqualFold(container.State, "running") {
+			merged.PublishedPorts = mergePublishedPorts(container.PublishedPorts, servicePublishesByName[serviceName])
+		}
+		out[i] = merged
+	}
+	return out
+}
+
+func mergePublishedPorts(existing []store.ContainerPublishedPort, servicePublishes []store.SwarmServicePort) []store.ContainerPublishedPort {
+	if len(servicePublishes) == 0 {
+		return existing
+	}
+
+	out := make([]store.ContainerPublishedPort, 0, len(existing)+len(servicePublishes))
+	seen := make(map[string]struct{}, len(existing)+len(servicePublishes))
+	for _, port := range existing {
+		key := containerPublishedPortKey(port)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, port)
+	}
+	for _, publish := range servicePublishes {
+		mapped := store.ContainerPublishedPort{
+			HostPort:   publish.HostPort,
+			TargetPort: publish.TargetPort,
+			Proto:      publish.Proto,
+			Source:     "service",
+			Mode:       publish.Mode,
+		}
+		key := containerPublishedPortKey(mapped)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, mapped)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].HostPort != out[j].HostPort {
+			return out[i].HostPort < out[j].HostPort
+		}
+		if out[i].TargetPort != out[j].TargetPort {
+			return out[i].TargetPort < out[j].TargetPort
+		}
+		if out[i].Proto != out[j].Proto {
+			return out[i].Proto < out[j].Proto
+		}
+		return out[i].Source < out[j].Source
+	})
+	return out
+}
+
+func mapContainerPublishedPorts(summary container.Summary, servicePublishes []store.SwarmServicePort) []store.ContainerPublishedPort {
+	out := make([]store.ContainerPublishedPort, 0)
+	seen := make(map[string]struct{})
+	for _, port := range summary.Ports {
+		if port.PublicPort == 0 {
+			continue
+		}
+		mapped := store.ContainerPublishedPort{
+			HostPort:   port.PublicPort,
+			TargetPort: port.PrivatePort,
+			Proto:      port.Type,
+			Source:     "container",
+		}
+		key := containerPublishedPortKey(mapped)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, mapped)
+	}
+	if strings.EqualFold(string(summary.State), "running") {
+		for _, publish := range servicePublishes {
+			mapped := store.ContainerPublishedPort{
+				HostPort:   publish.HostPort,
+				TargetPort: publish.TargetPort,
+				Proto:      publish.Proto,
+				Source:     "service",
+				Mode:       publish.Mode,
+			}
+			key := containerPublishedPortKey(mapped)
 			if _, ok := seen[key]; ok {
 				continue
 			}
@@ -644,18 +896,79 @@ func mapContainers(containers []container.Summary) []store.ContainerPort {
 		if out[i].HostPort != out[j].HostPort {
 			return out[i].HostPort < out[j].HostPort
 		}
-		return out[i].ContainerName < out[j].ContainerName
+		if out[i].TargetPort != out[j].TargetPort {
+			return out[i].TargetPort < out[j].TargetPort
+		}
+		if out[i].Proto != out[j].Proto {
+			return out[i].Proto < out[j].Proto
+		}
+		return out[i].Source < out[j].Source
 	})
 	return out
 }
 
-func containerPortKey(port store.ContainerPort) string {
+func mapSwarmServices(services []swarm.Service) []store.SwarmServicePort {
+	out := make([]store.SwarmServicePort, 0)
+	seen := make(map[string]struct{})
+	for _, service := range services {
+		name := strings.TrimSpace(service.Spec.Annotations.Name)
+		for _, port := range servicePortConfigs(service) {
+			if port.PublishedPort == 0 || port.TargetPort == 0 {
+				continue
+			}
+			mapped := store.SwarmServicePort{
+				ServiceID:   service.ID,
+				ServiceName: name,
+				HostPort:    uint16(port.PublishedPort),
+				TargetPort:  uint16(port.TargetPort),
+				Proto:       strings.ToLower(string(port.Protocol)),
+				Mode:        strings.ToLower(string(port.PublishMode)),
+			}
+			key := swarmServicePortKey(mapped)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, mapped)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].HostPort != out[j].HostPort {
+			return out[i].HostPort < out[j].HostPort
+		}
+		return out[i].ServiceName < out[j].ServiceName
+	})
+	return out
+}
+
+func servicePortConfigs(service swarm.Service) []swarm.PortConfig {
+	if len(service.Endpoint.Ports) > 0 {
+		return service.Endpoint.Ports
+	}
+	if service.Spec.EndpointSpec != nil {
+		return service.Spec.EndpointSpec.Ports
+	}
+	return nil
+}
+
+func swarmServicePortKey(port store.SwarmServicePort) string {
 	return strings.Join([]string{
-		port.ContainerID,
-		port.ContainerName,
+		port.ServiceID,
+		port.ServiceName,
 		strconv.FormatUint(uint64(port.HostPort), 10),
-		strconv.FormatUint(uint64(port.ContainerPort), 10),
+		strconv.FormatUint(uint64(port.TargetPort), 10),
 		port.Proto,
+		port.Mode,
+	}, "|")
+}
+
+func containerPublishedPortKey(port store.ContainerPublishedPort) string {
+	return strings.Join([]string{
+		strconv.FormatUint(uint64(port.HostPort), 10),
+		strconv.FormatUint(uint64(port.TargetPort), 10),
+		port.Proto,
+		port.Source,
+		port.Mode,
 	}, "|")
 }
 

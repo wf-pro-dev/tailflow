@@ -91,12 +91,26 @@ func TestSnapshotStore(t *testing.T) {
 			PID:     123,
 			Process: "nginx",
 		}},
-		Containers: []ContainerPort{{
+		Containers: []Container{{
 			ContainerID:   "abc",
 			ContainerName: "web",
-			HostPort:      8080,
-			ContainerPort: 80,
-			Proto:         "tcp",
+			Image:         "nginx:latest",
+			State:         "running",
+			Status:        "Up 1 hour",
+			PublishedPorts: []ContainerPublishedPort{{
+				HostPort:   8080,
+				TargetPort: 80,
+				Proto:      "tcp",
+				Source:     "container",
+			}},
+		}},
+		Services: []SwarmServicePort{{
+			ServiceID:   "svc-1",
+			ServiceName: "unipilot_api",
+			HostPort:    3000,
+			TargetPort:  3000,
+			Proto:       "tcp",
+			Mode:        "ingress",
 		}},
 		Forwards: []parser.ForwardAction{{
 			Listener: parser.Listener{Port: 80},
@@ -128,6 +142,12 @@ func TestSnapshotStore(t *testing.T) {
 	}
 	if len(got.Containers) != 1 || got.Containers[0].ContainerName != "web" {
 		t.Fatalf("Get().Containers = %#v, want web container", got.Containers)
+	}
+	if len(got.Containers[0].PublishedPorts) != 1 || got.Containers[0].PublishedPorts[0].HostPort != 8080 {
+		t.Fatalf("Get().Containers[0].PublishedPorts = %#v, want preserved published ports", got.Containers[0].PublishedPorts)
+	}
+	if len(got.Services) != 1 || got.Services[0].ServiceName != "unipilot_api" {
+		t.Fatalf("Get().Services = %#v, want unipilot_api service", got.Services)
 	}
 	if len(got.Forwards) != 1 || got.Forwards[0].Target.Raw != "localhost:3000" {
 		t.Fatalf("Get().Forwards = %#v, want forward action", got.Forwards)
@@ -169,15 +189,17 @@ func TestEdgeStore(t *testing.T) {
 		RawUpstream: "http://node-b:8080",
 	}
 	latestResolved := TopologyEdge{
-		ID:          "01JEDGE0000000000000000001",
-		RunID:       "01JRUN00000000000000000001",
-		FromNode:    "node-c",
-		FromPort:    443,
-		ToNode:      "node-d",
-		ToPort:      8443,
-		Kind:        EdgeKindDirect,
-		Resolved:    true,
-		RawUpstream: "https://node-d:8443",
+		ID:                 "01JEDGE0000000000000000001",
+		RunID:              "01JRUN00000000000000000001",
+		FromNode:           "node-c",
+		FromPort:           443,
+		ToNode:             "node-d",
+		ToPort:             8443,
+		ToRuntimeNode:      "node-e",
+		ToRuntimeContainer: "svc.1.xyz",
+		Kind:               EdgeKindDirect,
+		Resolved:           true,
+		RawUpstream:        "https://node-d:8443",
 	}
 	latestUnresolved := TopologyEdge{
 		ID:          "01JEDGE0000000000000000002",
@@ -201,6 +223,9 @@ func TestEdgeStore(t *testing.T) {
 	}
 	if got.ToNode != latestResolved.ToNode {
 		t.Fatalf("Get().ToNode = %s, want %s", got.ToNode, latestResolved.ToNode)
+	}
+	if got.ToRuntimeNode != latestResolved.ToRuntimeNode || got.ToRuntimeContainer != latestResolved.ToRuntimeContainer {
+		t.Fatalf("Get() runtime = (%q,%q), want (%q,%q)", got.ToRuntimeNode, got.ToRuntimeContainer, latestResolved.ToRuntimeNode, latestResolved.ToRuntimeContainer)
 	}
 
 	latestEdges, err := repo.LatestEdges(ctx)
