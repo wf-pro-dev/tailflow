@@ -147,6 +147,36 @@ func TestRunStartsWatchersAfterInitialCyclePopulatesStatus(t *testing.T) {
 	}
 }
 
+func TestRunDoesNotStartWatchersWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fc := &fakeCollector{
+		statuses: []collector.NodeStatus{{NodeName: "node-a", Online: true}},
+		runOnceFunc: func(context.Context) (store.CollectionRun, error) {
+			cancel()
+			return store.CollectionRun{ID: "run-1"}, nil
+		},
+		watchNodeFunc: func(context.Context, core.NodeName) error {
+			t.Fatal("WatchNode() should not be called when watchers are disabled")
+			return nil
+		},
+	}
+
+	s := newScheduler(SchedulerConfig{
+		CollectInterval: time.Millisecond,
+		CollectJitter:   0,
+		DisableWatchers: true,
+	}, fc, nil, nil)
+
+	err := s.Run(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context canceled", err)
+	}
+}
+
 func TestSuperviseWatcherRetriesAfterFailure(t *testing.T) {
 	t.Parallel()
 

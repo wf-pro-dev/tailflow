@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
@@ -146,6 +147,18 @@ func TestDiffEdges(t *testing.T) {
 	}
 	if len(diff.Removed) != 0 {
 		t.Fatalf("len(diff.Removed) = %d, want 0", len(diff.Removed))
+	}
+	if diff.Removed == nil {
+		t.Fatal("diff.Removed = nil, want empty slice")
+	}
+
+	body, err := json.Marshal(diff)
+	if err != nil {
+		t.Fatalf("json.Marshal(diff) error = %v", err)
+	}
+	want := `{"added":[{"id":"","run_id":"","from_node":"node-a","from_port":443,"from_process":"","from_container":"","to_node":"node-d","to_port":8443,"to_process":"","to_container":"","to_service":"","kind":"proxy_pass","resolved":true,"raw_upstream":"https://100.64.0.4:8443"}],"removed":[],"changed":[{"id":"","run_id":"","from_node":"node-a","from_port":80,"from_process":"","from_container":"","to_node":"node-c","to_port":8081,"to_process":"","to_container":"","to_service":"","kind":"proxy_pass","resolved":true,"raw_upstream":"http://100.64.0.2:8080"}]}`
+	if string(body) != want {
+		t.Fatalf("json.Marshal(diff) = %s, want %s", body, want)
 	}
 }
 

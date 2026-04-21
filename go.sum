@@ -509,6 +509,8 @@ github.com/vishvananda/netns v0.0.5 h1:DfiHV+j8bA32MFM7bfEunvT8IAqQ/NzSJHtcmW5zd
 github.com/vishvananda/netns v0.0.5/go.mod h1:SpkAiCQRtJ6TvvxPnOSyH3BMl6unz3xZlaprSwhNNJM=
 github.com/wf-pro-dev/tailkit v0.4.0 h1:dIybLe65LkgC2guLKJSS4ii3YqFK8Nh9B33UOXB/zvQ=
 github.com/wf-pro-dev/tailkit v0.4.0/go.mod h1:nRevUeZFbIlGRh/6q2cU+ufqOlL8I6DatlXPPmLtzjg=
+github.com/wf-pro-dev/tailkit v0.4.1 h1:NPTOb4b0QO3adyvYEHRd+sd6lkUEvY3qbVMlvpXlUS4=
+github.com/wf-pro-dev/tailkit v0.4.1/go.mod h1:nRevUeZFbIlGRh/6q2cU+ufqOlL8I6DatlXPPmLtzjg=
 github.com/x448/float16 v0.8.4 h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=
 github.com/x448/float16 v0.8.4/go.mod h1:14CWIYCyZA/cWjXOioeEpHeN/83MdbZDRQHoFcYsOfg=
 github.com/xordataexchange/crypt v0.0.3-0.20170626215501-b2862e3d0a77/go.mod h1:aYKd//L2LvnjZzWKhF00oedf4jCCReLcmhLdhm1A27Q=

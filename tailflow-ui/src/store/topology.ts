@@ -138,13 +138,15 @@ function applyEdgeDiffToSnapshot(
     topologySnapshot.edges.map((edge) => [edgeKey(edge), edge] as const),
   )
 
-  for (const removedEdge of event.diff.removed) {
+  const normalizedDiff = normalizeEdgeDiff(event.diff)
+
+  for (const removedEdge of normalizedDiff.removed) {
     edgeMap.delete(edgeKey(removedEdge))
   }
-  for (const changedEdge of event.diff.changed) {
+  for (const changedEdge of normalizedDiff.changed) {
     edgeMap.set(edgeKey(changedEdge), changedEdge)
   }
-  for (const addedEdge of event.diff.added) {
+  for (const addedEdge of normalizedDiff.added) {
     edgeMap.set(edgeKey(addedEdge), addedEdge)
   }
 
@@ -168,6 +170,14 @@ function buildNodeStatusByNode(nodes: NodeResponse[]): Record<string, NodeStatus
       },
     ]),
   )
+}
+
+function normalizeEdgeDiff(diff: EdgeDiff): EdgeDiff {
+  return {
+    added: Array.isArray(diff.added) ? diff.added : [],
+    removed: Array.isArray(diff.removed) ? diff.removed : [],
+    changed: Array.isArray(diff.changed) ? diff.changed : [],
+  }
 }
 
 function buildPortsByNode(snapshot: TopologyResponse): Record<string, ListenPort[]> {
@@ -329,10 +339,15 @@ export const useTopologyStore = create<TopologyStoreState>((set, get) => ({
   },
 
   applyEdgeDiff: (eventName, event) => {
+    const normalizedDiff = normalizeEdgeDiff(event.diff)
+
     set((state) => ({
       ...state,
-      topologySnapshot: applyEdgeDiffToSnapshot(state.topologySnapshot, event),
-      lastEdgeDiff: event.diff,
+      topologySnapshot: applyEdgeDiffToSnapshot(state.topologySnapshot, {
+        ...event,
+        diff: normalizedDiff,
+      }),
+      lastEdgeDiff: normalizedDiff,
       lastAppliedEventName: eventName,
     }))
     logTopologyStoreState(eventName, get())

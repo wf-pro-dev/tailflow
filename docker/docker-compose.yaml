@@ -1,8 +1,8 @@
+name: tailflow
+
 services:
-  tailflow-backend:
-    build:
-      context: ..
-      dockerfile: docker/build/Dockerfile.backend
+  backend:
+    image: wwwill-1.lab:5000/tailflow/backend:${BACKEND_TAG:-dev}
     networks:
       - tailflow-net
     container_name: tailflow-backend
@@ -21,16 +21,17 @@ services:
     volumes:
       - tailflow-data:/var/lib/tailflow
 
-  tailflow-ui:
-    build:
-      context: ..
-      dockerfile: docker/build/Dockerfile.ui
+  ui:
+    image: wwwill-1.lab:5000/tailflow/ui:${UI_TAG:-dev}
     networks:
       - tailflow-net
     container_name: tailflow-ui
     restart: unless-stopped
     ports:
-      - "${TAILFLOW_UI_PORT:-3000}:80"
+      - target: 80
+        published: "${TAILFLOW_UI_PORT:-3000}"
+        host_ip: "${TAILFLOW_UI_BIND_IP:-127.0.0.1}"
+        protocol: tcp
 
 volumes:
   tailflow-data:

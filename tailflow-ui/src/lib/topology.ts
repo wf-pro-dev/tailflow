@@ -73,6 +73,64 @@ export function normalizeTopologyResponse(
   }
 }
 
+export interface TopologyEdgeEndpointLabel {
+  name: string
+  portLabel: string
+}
+
+function pickFirstNonEmpty(...values: Array<string | null | undefined>): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim()
+    }
+  }
+
+  return ''
+}
+
+export function formatTopologyEdgePortLabel(port: number): string {
+  return Number.isFinite(port) && port > 0 ? String(port) : 'n/a'
+}
+
+export function buildTopologyEdgeEndpointLabel(
+  edge: TopologyEdge,
+  endpoint: 'source' | 'target',
+): TopologyEdgeEndpointLabel {
+  if (endpoint === 'source') {
+    const sourceName = pickFirstNonEmpty(
+      edge.from_container,
+      edge.from_process,
+      edge.from_node,
+    )
+
+    return {
+      name: sourceName || 'unknown source',
+      portLabel: formatTopologyEdgePortLabel(edge.from_port),
+    }
+  }
+
+  const targetName = pickFirstNonEmpty(
+    edge.to_runtime_container,
+    edge.to_service,
+    edge.to_container,
+    edge.to_process,
+    edge.to_runtime_node,
+    edge.to_node,
+    edge.raw_upstream,
+  )
+
+  return {
+    name: targetName || 'unresolved target',
+    portLabel: formatTopologyEdgePortLabel(edge.to_port),
+  }
+}
+
+export function formatTopologyEdgeEndpointText(
+  endpoint: TopologyEdgeEndpointLabel,
+): string {
+  return `${endpoint.name}:${endpoint.portLabel}`
+}
+
 export function formatTopologyEdgeLabel(edge: TopologyEdge): string {
   switch (edge.kind) {
     case 'container_publish':

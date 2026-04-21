@@ -28,6 +28,8 @@ vendor/
 .env.*
 !.env.example
 
+/tailflow-probe
+
 # Logs and temp files
 *.log
 tmp/

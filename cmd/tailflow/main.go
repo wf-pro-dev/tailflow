@@ -31,6 +31,7 @@ type config struct {
 	CollectInterval time.Duration
 	CollectJitter   time.Duration
 	NodeTimeout     time.Duration
+	DisableWatchers bool
 }
 
 func main() {
@@ -81,6 +82,7 @@ func run(ctx context.Context, cfg config) error {
 			CollectInterval: cfg.CollectInterval,
 			CollectJitter:   cfg.CollectJitter,
 			NodeTimeout:     cfg.NodeTimeout,
+			DisableWatchers: cfg.DisableWatchers,
 		},
 		collectorSvc,
 		resolverSvc,
@@ -144,6 +146,7 @@ func loadConfig() (config, error) {
 	stateDir := os.Getenv("TAILFLOW_STATE_DIR")
 
 	ephemeral := envBool("TAILFLOW_EPHEMERAL", false)
+	disableWatchers := envBool("TAILFLOW_DISABLE_WATCHERS", false)
 	collectInterval, err := envDuration("TAILFLOW_COLLECT_INTERVAL", 30*time.Second)
 	if err != nil {
 		return config{}, err
@@ -166,6 +169,7 @@ func loadConfig() (config, error) {
 		CollectInterval: collectInterval,
 		CollectJitter:   collectJitter,
 		NodeTimeout:     nodeTimeout,
+		DisableWatchers: disableWatchers,
 	}, nil
 }
 

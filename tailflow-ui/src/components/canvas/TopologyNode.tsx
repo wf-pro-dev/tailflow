@@ -1,9 +1,11 @@
+import { useEffect } from 'react'
 import type { NodeProps } from '@xyflow/react'
-import { Handle, Position } from '@xyflow/react'
+import { Handle, Position, useUpdateNodeInternals } from '@xyflow/react'
 import type { TopologyCanvasNodeData } from './layout'
 import { cn } from '../../lib/utils'
 
 export function TopologyNode(props: NodeProps) {
+  const updateNodeInternals = useUpdateNodeInternals()
   const {
     topologyNode,
     inventoryNode,
@@ -11,12 +13,21 @@ export function TopologyNode(props: NodeProps) {
     statusTone,
     lastSeenLabel,
     isStale,
-  } =
-    props.data as TopologyCanvasNodeData
+    sourceHandles,
+    targetHandles,
+  } = props.data as TopologyCanvasNodeData
   const publishedContainerPortCount = topologyNode.containers.reduce(
     (total, container) => total + container.published_ports.length,
     0,
   )
+  const handleSignature = [
+    targetHandles.map((handle) => `${handle.id}:${handle.top}`).join('|'),
+    sourceHandles.map((handle) => `${handle.id}:${handle.top}`).join('|'),
+  ].join('__')
+
+  useEffect(() => {
+    updateNodeInternals(props.id)
+  }, [handleSignature, props.id, updateNodeInternals])
 
   return (
     <div
@@ -29,30 +40,26 @@ export function TopologyNode(props: NodeProps) {
             : 'border-zinc-200',
       )}
     >
-      <Handle
-        id="default-target"
-        type="target"
-        position={Position.Left}
-        className="!h-2.5 !w-2.5 !border !border-zinc-300 !bg-white"
-      />
-      <Handle
-        id="default-source"
-        type="source"
-        position={Position.Right}
-        className="!h-2.5 !w-2.5 !border !border-zinc-300 !bg-white"
-      />
-      <Handle
-        id="self-source"
-        type="source"
-        position={Position.Right}
-        className="!top-5 !h-2 !w-2 !border !border-zinc-300 !bg-white"
-      />
-      <Handle
-        id="self-target"
-        type="target"
-        position={Position.Right}
-        className="!top-10 !h-2 !w-2 !border !border-zinc-300 !bg-white"
-      />
+      {targetHandles.map((handle) => (
+        <Handle
+          key={handle.id}
+          id={handle.id}
+          type="target"
+          position={Position.Left}
+          style={{ top: `${handle.top}px` }}
+          className="!h-1.5 !w-1.5 !border !border-zinc-300 !bg-white"
+        />
+      ))}
+      {sourceHandles.map((handle) => (
+        <Handle
+          key={handle.id}
+          id={handle.id}
+          type="source"
+          position={Position.Right}
+          style={{ top: `${handle.top}px` }}
+          className="!h-1.5 !w-1.5 !border !border-zinc-300 !bg-white"
+        />
+      ))}
 
       <div className="flex items-start justify-between gap-4 border-b border-zinc-100 px-4 py-4">
         <div className="min-w-0 space-y-1">

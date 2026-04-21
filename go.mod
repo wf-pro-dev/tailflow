@@ -7,7 +7,7 @@ require (
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/tufanbarisyildirim/gonginx v0.0.0-20260220081509-8e17ce617db3
-	github.com/wf-pro-dev/tailkit v0.4.0
+	github.com/wf-pro-dev/tailkit v0.4.1
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.1
 	tailscale.com v1.96.2

@@ -59,7 +59,7 @@ export function EdgeList(props: EdgeListProps) {
                   key={edge.id}
                   edge={edge}
                   direction="outbound"
-                  counterpartLabel="same node"
+                  counterpartLabel={edge.from_node}
                 />
               ))}
             </div>
@@ -152,7 +152,7 @@ function EdgeCard(props: {
                 runtimeDiffers ? (
                   <p>Service {props.edge.to_service}</p>
 
-                ) : <p className="text-zinc-400"> Running on {props.edge.to_runtime_container} </p>
+                ) : <p className="text-zinc-400"> Running {props.edge.to_runtime_container} </p>
               ) : (
                 <p>Service {props.edge.to_service}</p>
               )}

@@ -219,13 +219,10 @@ func (c *Collector) RunOnce(ctx context.Context) (store.CollectionRun, error) {
 	results := make(chan collectNodeResult, len(peers))
 	var wg sync.WaitGroup
 	for _, peer := range peers {
-		peer := peer
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			nodeCtx, cancel := c.nodeContext(ctx)
-			defer cancel()
-			snapshot, err := c.collectNode(nodeCtx, peer, run.ID)
+			snapshot, err := c.collectNode(ctx, peer, run.ID)
 			results <- collectNodeResult{peer: peer, snapshot: snapshot, err: err}
 		}()
 	}
@@ -376,7 +373,7 @@ func (c *Collector) PreviewProxyConfig(ctx context.Context, nodeName core.NodeNa
 		return "", nil, parser.ParseResult{}, fmt.Errorf("tailkit node client unavailable")
 	}
 
-	nodeCtx, cancel := c.nodeContext(ctx)
+	nodeCtx, cancel := c.remoteCallContext(ctx)
 	defer cancel()
 
 	result := c.readAndParseProxyConfig(nodeCtx, node.Files(), kind, configPath)
@@ -403,7 +400,9 @@ func (c *Collector) collectNode(ctx context.Context, peer tailkittypes.Peer, run
 
 	var partialErrs []error
 
-	ports, err := node.Metrics().Ports(ctx)
+	portsCtx, cancelPorts := c.remoteCallContext(ctx)
+	ports, err := node.Metrics().Ports(portsCtx)
+	cancelPorts()
 	if err != nil {
 		partialErrs = append(partialErrs, fmt.Errorf("ports: %w", err))
 	} else {
@@ -413,7 +412,9 @@ func (c *Collector) collectNode(ctx context.Context, peer tailkittypes.Peer, run
 	dockerEnabled := true
 	swarmReadEnabled := false
 
-	dockerConfig, err := node.Docker().Config(ctx)
+	dockerConfigCtx, cancelDockerConfig := c.remoteCallContext(ctx)
+	dockerConfig, err := node.Docker().Config(dockerConfigCtx)
+	cancelDockerConfig()
 	if err != nil {
 		partialErrs = append(partialErrs, fmt.Errorf("docker config: %w", err))
 	} else {
@@ -422,7 +423,9 @@ func (c *Collector) collectNode(ctx context.Context, peer tailkittypes.Peer, run
 	}
 
 	if swarmReadEnabled {
-		services, err := node.Docker().SwarmServices(ctx)
+		swarmCtx, cancelSwarm := c.remoteCallContext(ctx)
+		services, err := node.Docker().SwarmServices(swarmCtx)
+		cancelSwarm()
 		if err != nil && !errors.Is(err, tailkittypes.ErrDockerUnavailable) {
 			log.Printf("collector: swarm services skipped node=%s err=%v", nodeName, err)
 		} else if err == nil {
@@ -431,7 +434,9 @@ func (c *Collector) collectNode(ctx context.Context, peer tailkittypes.Peer, run
 	}
 
 	if dockerEnabled {
-		containers, err := node.Docker().Containers(ctx)
+		containersCtx, cancelContainers := c.remoteCallContext(ctx)
+		containers, err := node.Docker().Containers(containersCtx)
+		cancelContainers()
 		if err != nil && !errors.Is(err, tailkittypes.ErrDockerUnavailable) {
 			partialErrs = append(partialErrs, fmt.Errorf("docker: %w", err))
 		} else if err == nil {
@@ -448,7 +453,9 @@ func (c *Collector) collectNode(ctx context.Context, peer tailkittypes.Peer, run
 		} else {
 			allForwards := make([]parser.ForwardAction, 0)
 			for _, config := range configs {
-				result := c.readAndParseProxyConfig(ctx, node.Files(), config.Kind, config.ConfigPath)
+				configCtx, cancelConfig := c.remoteCallContext(ctx)
+				result := c.readAndParseProxyConfig(configCtx, node.Files(), config.Kind, config.ConfigPath)
+				cancelConfig()
 				allForwards = append(allForwards, result.parsed.Forwards...)
 				for _, warning := range result.parsed.Errors {
 					partialErrs = append(partialErrs, errors.New("proxy config warning: "+warning))
@@ -476,7 +483,7 @@ func (c *Collector) localStoreContext(ctx context.Context) (context.Context, con
 	return context.WithTimeout(base, localStoreTimeout)
 }
 
-func (c *Collector) nodeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+func (c *Collector) remoteCallContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	base := ctx
 	if base == nil {
 		base = context.Background()

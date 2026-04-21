@@ -53,6 +53,12 @@ tailflow-ui
 - Backend design notes: [`tailflow-implementation.md`](./tailflow-implementation.md)
 - UI implementation notes: [`tailflow-ui-implementation.md`](./tailflow-ui-implementation.md)
 
+## Deployment Notes
+
+- The UI compose service binds its published port to `TAILFLOW_UI_BIND_IP` when set, and otherwise falls back to `127.0.0.1`.
+- Run [`docker/compose.sh`](./docker/compose.sh) instead of `docker compose` to auto-detect the host's Tailscale IPv4 address for normal startup.
+- If you want to invoke `docker compose` directly, export `TAILFLOW_UI_BIND_IP` yourself first when you need the UI exposed on the tailnet.
+
 ## License
 
 MIT. See [`LICENSE`](./LICENSE).

@@ -328,23 +328,125 @@ func TestCollectorRunOnceUsesLocalStoreContextForProxyConfigAndPersistence(t *te
 	}
 }
 
-func TestCollectorRunOnceAppliesPerNodeTimeoutToRemoteReads(t *testing.T) {
+func TestCollectorRunOnceAppliesPerOperationTimeoutToDockerReads(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestStore(t)
+	configDeadlineCh := make(chan time.Duration, 1)
+	containersDeadlineCh := make(chan time.Duration, 1)
+	c := NewCollector(nil, db.Runs(), db.Snapshots(), nil, core.NewEventBus(), parser.NewRegistry())
+	c.SetNodeTimeout(25 * time.Millisecond)
+	c.discoverPeers = func(_ context.Context, _ *tailkit.Server) ([]tailkittypes.Peer, error) {
+		return []tailkittypes.Peer{testPeer("node-a", true, "100.64.0.1")}, nil
+	}
+	c.newNode = func(string) nodeClient {
+		return fakeNodeClient{
+			metrics: fakeMetricsClient{
+				ports: []tailkittypes.Port{{Addr: "0.0.0.0", Port: 80, Proto: "tcp", PID: 123, Process: "nginx"}},
+			},
+			docker: fakeDockerClient{
+				configFunc: func(ctx context.Context) (integrationsTypes.DockerConfig, error) {
+					deadline, ok := ctx.Deadline()
+					if !ok {
+						t.Fatal("Config() context missing deadline")
+					}
+					select {
+					case configDeadlineCh <- time.Until(deadline):
+					default:
+					}
+					<-ctx.Done()
+					return integrationsTypes.DockerConfig{}, ctx.Err()
+				},
+				containersFunc: func(ctx context.Context) ([]container.Summary, error) {
+					deadline, ok := ctx.Deadline()
+					if !ok {
+						t.Fatal("Containers() context missing deadline")
+					}
+					select {
+					case containersDeadlineCh <- time.Until(deadline):
+					default:
+					}
+					return []container.Summary{{
+						ID:    "container-1",
+						Names: []string{"/web"},
+					}}, nil
+				},
+			},
+			files: fakeFilesClient{},
+		}
+	}
+
+	parentCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	run, err := c.RunOnce(parentCtx)
+	if err == nil {
+		t.Fatal("RunOnce() error = nil, want timeout error")
+	}
+	if run.ErrorCount != 1 {
+		t.Fatalf("RunOnce().ErrorCount = %d, want 1", run.ErrorCount)
+	}
+
+	select {
+	case deadline := <-configDeadlineCh:
+		if deadline > 200*time.Millisecond {
+			t.Fatalf("Config() deadline = %s, want short per-operation timeout", deadline)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected docker config deadline to be observed")
+	}
+
+	select {
+	case deadline := <-containersDeadlineCh:
+		if deadline > 200*time.Millisecond {
+			t.Fatalf("Containers() deadline = %s, want short per-operation timeout", deadline)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected docker containers deadline to be observed")
+	}
+
+	snapshot, snapErr := db.Snapshots().LatestByNode(ctx, "node-a")
+	if snapErr != nil {
+		t.Fatalf("LatestByNode(): %v", snapErr)
+	}
+	if len(snapshot.Containers) != 1 || snapshot.Containers[0].ContainerName != "web" {
+		t.Fatalf("snapshot.Containers = %#v, want collected containers despite config timeout", snapshot.Containers)
+	}
+	if !strings.Contains(snapshot.Error, "docker config: context deadline exceeded") {
+		t.Fatalf("snapshot.Error = %q, want docker config timeout", snapshot.Error)
+	}
+}
+
+func TestCollectorRunOnceAppliesPerConfigTimeoutToProxyReads(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 	db := openTestStore(t)
 	configStore := db.ProxyConfigs()
-	if err := configStore.Save(ctx, parser.ProxyConfigInput{
-		ID:         "cfg-1",
-		NodeName:   "node-a",
-		Kind:       "nginx",
-		ConfigPath: "/etc/nginx/nginx.conf",
-		UpdatedAt:  core.NowTimestamp(),
-	}); err != nil {
-		t.Fatalf("save proxy config: %v", err)
+	for _, cfg := range []parser.ProxyConfigInput{
+		{
+			ID:         "cfg-1",
+			NodeName:   "node-a",
+			Kind:       "nginx",
+			ConfigPath: "/etc/nginx/slow.conf",
+			UpdatedAt:  core.NowTimestamp(),
+		},
+		{
+			ID:         "cfg-2",
+			NodeName:   "node-a",
+			Kind:       "nginx",
+			ConfigPath: "/etc/nginx/fast.conf",
+			UpdatedAt:  core.NowTimestamp(),
+		},
+	} {
+		if err := configStore.Save(ctx, cfg); err != nil {
+			t.Fatalf("save proxy config %s: %v", cfg.ID, err)
+		}
 	}
 
-	deadlineCh := make(chan time.Duration, 1)
+	slowDeadlineCh := make(chan time.Duration, 1)
+	fastDeadlineCh := make(chan time.Duration, 1)
 	c := NewCollector(nil, db.Runs(), db.Snapshots(), configStore, core.NewEventBus(), parser.NewRegistry())
 	c.SetNodeTimeout(25 * time.Millisecond)
 	c.discoverPeers = func(_ context.Context, _ *tailkit.Server) ([]tailkittypes.Peer, error) {
@@ -362,12 +464,32 @@ func TestCollectorRunOnceAppliesPerNodeTimeoutToRemoteReads(t *testing.T) {
 					if !ok {
 						t.Fatal("Read() context missing deadline")
 					}
-					select {
-					case deadlineCh <- time.Until(deadline):
+					switch path {
+					case "/etc/nginx/slow.conf":
+						select {
+						case slowDeadlineCh <- time.Until(deadline):
+						default:
+						}
+						<-ctx.Done()
+						return "", ctx.Err()
+					case "/etc/nginx/fast.conf":
+						select {
+						case fastDeadlineCh <- time.Until(deadline):
+						default:
+						}
+						if err := ctx.Err(); err != nil {
+							return "", err
+						}
+						return `
+server {
+    listen 8080;
+    location / {
+        proxy_pass http://127.0.0.1:9443;
+    }
+}`, nil
 					default:
+						return "", errors.New("file not found")
 					}
-					<-ctx.Done()
-					return "", ctx.Err()
 				},
 			},
 		}
@@ -385,17 +507,29 @@ func TestCollectorRunOnceAppliesPerNodeTimeoutToRemoteReads(t *testing.T) {
 	}
 
 	select {
-	case deadline := <-deadlineCh:
+	case deadline := <-slowDeadlineCh:
 		if deadline > 200*time.Millisecond {
-			t.Fatalf("Read() deadline = %s, want short per-node timeout", deadline)
+			t.Fatalf("slow Read() deadline = %s, want short per-config timeout", deadline)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("expected file read deadline to be observed")
+		t.Fatal("expected slow proxy config deadline to be observed")
+	}
+
+	select {
+	case deadline := <-fastDeadlineCh:
+		if deadline > 200*time.Millisecond {
+			t.Fatalf("fast Read() deadline = %s, want short per-config timeout", deadline)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected fast proxy config deadline to be observed")
 	}
 
 	snapshot, snapErr := db.Snapshots().LatestByNode(ctx, "node-a")
 	if snapErr != nil {
 		t.Fatalf("LatestByNode(): %v", snapErr)
+	}
+	if len(snapshot.Forwards) != 1 {
+		t.Fatalf("snapshot.Forwards = %#v, want fast proxy config to still be parsed", snapshot.Forwards)
 	}
 	if !strings.Contains(snapshot.Error, "proxy config read: context deadline exceeded") {
 		t.Fatalf("snapshot.Error = %q, want proxy config timeout", snapshot.Error)
@@ -814,16 +948,22 @@ func (f fakeMetricsClient) StreamPorts(ctx context.Context, fn func(tailkittypes
 }
 
 type fakeDockerClient struct {
-	config     integrationsTypes.DockerConfig
-	containers []container.Summary
-	services   []swarm.Service
-	err        error
-	configErr  error
-	swarmErr   error
-	dockerErr  error
+	config         integrationsTypes.DockerConfig
+	containers     []container.Summary
+	services       []swarm.Service
+	err            error
+	configErr      error
+	swarmErr       error
+	dockerErr      error
+	configFunc     func(context.Context) (integrationsTypes.DockerConfig, error)
+	containersFunc func(context.Context) ([]container.Summary, error)
+	servicesFunc   func(context.Context) ([]swarm.Service, error)
 }
 
-func (f fakeDockerClient) Config(context.Context) (integrationsTypes.DockerConfig, error) {
+func (f fakeDockerClient) Config(ctx context.Context) (integrationsTypes.DockerConfig, error) {
+	if f.configFunc != nil {
+		return f.configFunc(ctx)
+	}
 	if !f.config.Enabled && len(f.config.Containers.Allow) == 0 && len(f.config.Swarm.Allow) == 0 && len(f.config.Compose.Allow) == 0 && len(f.config.Images.Allow) == 0 {
 		return integrationsTypes.DockerConfig{Enabled: true}, nil
 	}
@@ -833,14 +973,20 @@ func (f fakeDockerClient) Config(context.Context) (integrationsTypes.DockerConfi
 	return f.config, f.err
 }
 
-func (f fakeDockerClient) Containers(context.Context) ([]container.Summary, error) {
+func (f fakeDockerClient) Containers(ctx context.Context) ([]container.Summary, error) {
+	if f.containersFunc != nil {
+		return f.containersFunc(ctx)
+	}
 	if f.dockerErr != nil {
 		return f.containers, f.dockerErr
 	}
 	return f.containers, f.err
 }
 
-func (f fakeDockerClient) SwarmServices(context.Context) ([]swarm.Service, error) {
+func (f fakeDockerClient) SwarmServices(ctx context.Context) ([]swarm.Service, error) {
+	if f.servicesFunc != nil {
+		return f.servicesFunc(ctx)
+	}
 	if f.swarmErr != nil {
 		return f.services, f.swarmErr
 	}

@@ -42,6 +42,7 @@ type SchedulerConfig struct {
 	CollectInterval time.Duration
 	CollectJitter   time.Duration
 	NodeTimeout     time.Duration
+	DisableWatchers bool
 }
 
 // Scheduler owns the periodic collection loop and watch workers.
@@ -112,8 +113,10 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		if err := s.runCycle(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			return err
 		}
-		if err := s.ensureWatchers(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			return err
+		if !s.config.DisableWatchers {
+			if err := s.ensureWatchers(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				return err
+			}
 		}
 
 		wait := s.nextInterval()

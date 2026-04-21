@@ -239,7 +239,11 @@ func DiffEdges(previous, current []store.TopologyEdge) EdgeDiff {
 		curByKey[edgeKey(edge)] = edge
 	}
 
-	var diff EdgeDiff
+	diff := EdgeDiff{
+		Added:   []store.TopologyEdge{},
+		Removed: []store.TopologyEdge{},
+		Changed: []store.TopologyEdge{},
+	}
 	for key, currentEdge := range curByKey {
 		if previousEdge, ok := prevByKey[key]; !ok {
 			diff.Added = append(diff.Added, currentEdge)
