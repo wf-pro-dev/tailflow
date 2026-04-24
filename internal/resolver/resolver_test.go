@@ -759,6 +759,57 @@ func TestTargetMetadataPrefersContainer(t *testing.T) {
 	}
 }
 
+func TestBuildTopologyDataBuildsRouteCentricSnapshot(t *testing.T) {
+	t.Parallel()
+
+	data := BuildTopologyData([]store.NodeSnapshot{
+		{
+			NodeName:    "wwwill-1",
+			TailscaleIP: "100.64.0.1",
+			CollectedAt: core.NowTimestamp(),
+			Ports:       []store.ListenPort{{Port: 80, Process: "nginx"}},
+			Forwards: []parser.ForwardAction{{
+				Listener: parser.Listener{Port: 80},
+				Target: parser.ForwardTarget{
+					Raw:  "http://warehouse-13-1:3000",
+					Kind: parser.TargetKindAddress,
+					Host: "warehouse-13-1",
+					Port: 3000,
+				},
+			}},
+		},
+		{
+			NodeName:    "warehouse-13-1",
+			TailscaleIP: "100.64.0.2",
+			CollectedAt: core.NowTimestamp(),
+			Containers: []store.Container{{
+				ContainerName: "tailflow-ui",
+				Image:         "tailflow/ui:latest",
+				State:         "running",
+				PublishedPorts: []store.ContainerPublishedPort{{
+					HostPort:   3000,
+					TargetPort: 3000,
+					Proto:      "tcp",
+					Source:     "container",
+				}},
+			}},
+		},
+	})
+
+	if len(data.Routes) != 1 {
+		t.Fatalf("len(data.Routes) = %d, want 1", len(data.Routes))
+	}
+	if !data.Routes[0].Resolved {
+		t.Fatalf("route = %#v, want resolved route", data.Routes[0])
+	}
+	if len(data.RouteHops) != 3 {
+		t.Fatalf("len(data.RouteHops) = %d, want 3", len(data.RouteHops))
+	}
+	if data.Summary.RouteCount != 1 || data.Summary.UnresolvedRouteCount != 0 {
+		t.Fatalf("summary = %#v, want one resolved route", data.Summary)
+	}
+}
+
 func openTestStore(t *testing.T) *store.SQLiteStore {
 	t.Helper()
 

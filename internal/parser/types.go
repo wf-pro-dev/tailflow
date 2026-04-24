@@ -35,8 +35,9 @@ type ForwardTarget struct {
 // ForwardAction is the only parsed proxy shape the resolver needs:
 // one listener on the proxy node forwarding to one backend target.
 type ForwardAction struct {
-	Listener Listener      `json:"listener"`
-	Target   ForwardTarget `json:"target"`
+	Listener  Listener      `json:"listener"`
+	Target    ForwardTarget `json:"target"`
+	Hostnames []string      `json:"hostnames,omitempty"`
 }
 
 // ProxyRule is the legacy parsed shape kept only for backward-compatible reads.
@@ -62,6 +63,30 @@ type ProxyConfigInput struct {
 type ParseResult struct {
 	Forwards []ForwardAction `json:"forwards"`
 	Errors   []string        `json:"errors,omitempty"`
+}
+
+func NormalizeHostnames(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(strings.TrimSuffix(value, ".")))
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // ProxyParser is the strategy interface for one proxy kind.
@@ -143,6 +168,14 @@ func SortForwards(forwards []ForwardAction) {
 		if forwards[i].Target.Socket != forwards[j].Target.Socket {
 			return forwards[i].Target.Socket < forwards[j].Target.Socket
 		}
+		if len(forwards[i].Hostnames) != len(forwards[j].Hostnames) {
+			return len(forwards[i].Hostnames) < len(forwards[j].Hostnames)
+		}
+		for idx := range forwards[i].Hostnames {
+			if forwards[i].Hostnames[idx] != forwards[j].Hostnames[idx] {
+				return forwards[i].Hostnames[idx] < forwards[j].Hostnames[idx]
+			}
+		}
 		return forwards[i].Target.Raw < forwards[j].Target.Raw
 	})
 }
@@ -161,6 +194,7 @@ func DedupeForwards(forwards []ForwardAction) []ForwardAction {
 			forward.Target.Host,
 			strconv.FormatUint(uint64(forward.Target.Port), 10),
 			forward.Target.Socket,
+			strings.Join(forward.Hostnames, ","),
 			forward.Target.Raw,
 		}, "|")
 		if _, ok := seen[key]; ok {

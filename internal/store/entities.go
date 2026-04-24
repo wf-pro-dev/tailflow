@@ -51,6 +51,116 @@ type SwarmServicePort struct {
 	Mode        string  `json:"mode,omitempty"`
 }
 
+type TopologyHealth string
+
+const (
+	TopologyHealthHealthy    TopologyHealth = "healthy"
+	TopologyHealthDegraded   TopologyHealth = "degraded"
+	TopologyHealthUnresolved TopologyHealth = "unresolved"
+	TopologyHealthUnknown    TopologyHealth = "unknown"
+)
+
+// Service is the logical workload the user cares about.
+type Service struct {
+	ID          core.ID        `json:"id" db:"id"`
+	Name        string         `json:"name" db:"name"`
+	Kind        string         `json:"kind" db:"kind"`
+	Role        string         `json:"role,omitempty" db:"role"`
+	PrimaryNode core.NodeName  `json:"primary_node,omitempty" db:"primary_node"`
+	RuntimeIDs  []core.ID      `json:"runtime_ids,omitempty"`
+	ExposureIDs []core.ID      `json:"exposure_ids,omitempty"`
+	Health      TopologyHealth `json:"health,omitempty" db:"health"`
+	Tags        []string       `json:"tags,omitempty"`
+	Description string         `json:"description,omitempty" db:"description"`
+}
+
+// Runtime is one concrete process or container realizing a service.
+type Runtime struct {
+	ID             core.ID        `json:"id" db:"id"`
+	ServiceID      core.ID        `json:"service_id" db:"service_id"`
+	NodeID         core.NodeName  `json:"node_id" db:"node_id"`
+	RuntimeKind    string         `json:"runtime_kind" db:"runtime_kind"`
+	RuntimeName    string         `json:"runtime_name" db:"runtime_name"`
+	PID            int            `json:"pid,omitempty" db:"pid"`
+	ContainerID    string         `json:"container_id,omitempty" db:"container_id"`
+	Image          string         `json:"image,omitempty" db:"image"`
+	State          string         `json:"state,omitempty" db:"state"`
+	Ports          []uint16       `json:"ports,omitempty"`
+	NetworkNames   []string       `json:"network_names,omitempty"`
+	NetworkAliases []string       `json:"network_aliases,omitempty"`
+	Health         TopologyHealth `json:"health,omitempty" db:"health"`
+	CollectedAt    core.Timestamp `json:"collected_at,omitempty" db:"collected_at"`
+}
+
+// Exposure is one discovered way a service can be reached from outside its runtime boundary.
+type Exposure struct {
+	ID               core.ID        `json:"id" db:"id"`
+	ServiceID        core.ID        `json:"service_id" db:"service_id"`
+	RuntimeID        core.ID        `json:"runtime_id,omitempty" db:"runtime_id"`
+	NodeID           core.NodeName  `json:"node_id,omitempty" db:"node_id"`
+	Kind             string         `json:"kind" db:"kind"`
+	Protocol         string         `json:"protocol,omitempty" db:"protocol"`
+	Hostname         string         `json:"hostname,omitempty" db:"hostname"`
+	PathPrefix       string         `json:"path_prefix,omitempty" db:"path_prefix"`
+	Port             uint16         `json:"port,omitempty" db:"port"`
+	URL              string         `json:"url,omitempty" db:"url"`
+	IsPrimary        bool           `json:"is_primary" db:"is_primary"`
+	Visibility       string         `json:"visibility,omitempty" db:"visibility"`
+	Source           string         `json:"source,omitempty" db:"source"`
+	GatewayServiceID core.ID        `json:"gateway_service_id,omitempty" db:"gateway_service_id"`
+	Health           TopologyHealth `json:"health,omitempty" db:"health"`
+	ResolutionStatus string         `json:"resolution_status,omitempty" db:"resolution_status"`
+}
+
+// Route is the user-meaningful request path from one reachable endpoint to another service.
+type Route struct {
+	ID               core.ID        `json:"id" db:"id"`
+	Kind             string         `json:"kind" db:"kind"`
+	SourceServiceID  core.ID        `json:"source_service_id,omitempty" db:"source_service_id"`
+	SourceExposureID core.ID        `json:"source_exposure_id,omitempty" db:"source_exposure_id"`
+	TargetServiceID  core.ID        `json:"target_service_id,omitempty" db:"target_service_id"`
+	TargetRuntimeID  core.ID        `json:"target_runtime_id,omitempty" db:"target_runtime_id"`
+	DisplayName      string         `json:"display_name" db:"display_name"`
+	Resolved         bool           `json:"resolved" db:"resolved"`
+	Health           TopologyHealth `json:"health,omitempty" db:"health"`
+	HopIDs           []core.ID      `json:"hop_ids,omitempty"`
+	Hostnames        []string       `json:"hostnames,omitempty"`
+	Input            string         `json:"input,omitempty" db:"input"`
+}
+
+// RouteHop is one hop in a route.
+type RouteHop struct {
+	ID         core.ID        `json:"id" db:"id"`
+	RouteID    core.ID        `json:"route_id" db:"route_id"`
+	Order      int            `json:"order" db:"order"`
+	Kind       string         `json:"kind" db:"kind"`
+	From       string         `json:"from,omitempty" db:"from_ref"`
+	To         string         `json:"to,omitempty" db:"to_ref"`
+	Resolved   bool           `json:"resolved" db:"resolved"`
+	Health     TopologyHealth `json:"health,omitempty" db:"health"`
+	EvidenceID core.ID        `json:"evidence_id,omitempty" db:"evidence_id"`
+}
+
+// Evidence explains why a route resolved to a given target.
+type Evidence struct {
+	ID         core.ID  `json:"id" db:"id"`
+	MatchedBy  string   `json:"matched_by" db:"matched_by"`
+	Confidence string   `json:"confidence" db:"confidence"`
+	Reason     string   `json:"reason,omitempty" db:"reason"`
+	RawValue   string   `json:"raw_value,omitempty" db:"raw_value"`
+	Warnings   []string `json:"warnings,omitempty"`
+}
+
+// TopologySummary carries high-level counts for one topology snapshot.
+type TopologySummary struct {
+	NodeCount            int `json:"node_count"`
+	ServiceCount         int `json:"service_count"`
+	RuntimeCount         int `json:"runtime_count"`
+	ExposureCount        int `json:"exposure_count"`
+	RouteCount           int `json:"route_count"`
+	UnresolvedRouteCount int `json:"unresolved_route_count"`
+}
+
 // CollectionRun groups all snapshots collected in one cycle.
 type CollectionRun struct {
 	ID         core.ID        `json:"id" db:"id"`

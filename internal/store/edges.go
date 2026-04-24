@@ -77,8 +77,20 @@ func (s *sqliteEdgeStore) LatestEdges(ctx context.Context) ([]TopologyEdge, erro
 }
 
 func (s *sqliteEdgeStore) ListUnresolved(ctx context.Context) ([]TopologyEdge, error) {
+	var latestRunID string
+	err := toGorm(ctx, s.db).Model(&TopologyEdgeModel{}).Select("run_id").Order("run_id DESC").Limit(1).Take(&latestRunID).Error
+	if isRecordNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get latest unresolved edge run id: %w", err)
+	}
+
 	var models []TopologyEdgeModel
-	err := toGorm(ctx, s.db).Where("resolved = ?", false).Order("from_node ASC, from_port ASC").Find(&models).Error
+	err = toGorm(ctx, s.db).
+		Where("run_id = ? AND resolved = ?", latestRunID, false).
+		Order("from_node ASC, from_port ASC").
+		Find(&models).Error
 	if err != nil {
 		return nil, fmt.Errorf("list unresolved topology edges: %w", err)
 	}

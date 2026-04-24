@@ -67,6 +67,7 @@ func parseCaddyJSON(content string, warnings []caddyconfig.Warning) (ParseResult
 
 type caddyRouteContext struct {
 	listeners []Listener
+	hostnames []string
 }
 
 func walkCaddyJSON(node any, ctx caddyRouteContext, forwards *[]ForwardAction) {
@@ -76,10 +77,13 @@ func walkCaddyJSON(node any, ctx caddyRouteContext, forwards *[]ForwardAction) {
 		if listeners := extractCaddyListeners(value["listen"]); len(listeners) > 0 {
 			nextCtx.listeners = listeners
 		}
+		if hostnames := extractCaddyHostnames(value["match"]); len(hostnames) > 0 {
+			nextCtx.hostnames = hostnames
+		}
 
 		if handler, _ := value["handler"].(string); handler == "reverse_proxy" {
 			targets := extractCaddyTargets(value)
-			appendCaddyForwards(nextCtx.listeners, targets, forwards)
+			appendCaddyForwards(nextCtx.listeners, nextCtx.hostnames, targets, forwards)
 		}
 
 		for _, child := range value {
@@ -92,7 +96,7 @@ func walkCaddyJSON(node any, ctx caddyRouteContext, forwards *[]ForwardAction) {
 	}
 }
 
-func appendCaddyForwards(listeners []Listener, targets []ForwardTarget, forwards *[]ForwardAction) {
+func appendCaddyForwards(listeners []Listener, hostnames []string, targets []ForwardTarget, forwards *[]ForwardAction) {
 	if len(targets) == 0 {
 		return
 	}
@@ -106,11 +110,40 @@ func appendCaddyForwards(listeners []Listener, targets []ForwardTarget, forwards
 		}
 		for _, target := range targets {
 			*forwards = append(*forwards, ForwardAction{
-				Listener: listener,
-				Target:   target,
+				Listener:  listener,
+				Target:    target,
+				Hostnames: NormalizeHostnames(hostnames),
 			})
 		}
 	}
+}
+
+func extractCaddyHostnames(value any) []string {
+	matches, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+
+	hostnames := make([]string, 0)
+	for _, match := range matches {
+		matchMap, ok := match.(map[string]any)
+		if !ok {
+			continue
+		}
+		hosts, ok := matchMap["host"].([]any)
+		if !ok {
+			continue
+		}
+		for _, host := range hosts {
+			hostValue, ok := host.(string)
+			if !ok {
+				continue
+			}
+			hostnames = append(hostnames, hostValue)
+		}
+	}
+
+	return NormalizeHostnames(hostnames)
 }
 
 func extractCaddyListeners(value any) []Listener {

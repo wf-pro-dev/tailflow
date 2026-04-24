@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -50,6 +51,7 @@ func TestNginxParserParse(t *testing.T) {
 			content: `
 server {
     listen 80;
+    server_name app.example.com www.example.com;
     location / {
         proxy_pass http://127.0.0.1:3000;
     }
@@ -62,6 +64,7 @@ server {
 					Host: "127.0.0.1",
 					Port: 3000,
 				},
+				Hostnames: []string{"app.example.com", "www.example.com"},
 			}},
 		},
 		{
@@ -157,7 +160,7 @@ http {}`,
 				t.Fatalf("Parse returned %d forwards, want %d: %#v", len(got.Forwards), len(tt.want), got.Forwards)
 			}
 			for i := range tt.want {
-				if got.Forwards[i] != tt.want[i] {
+				if !reflect.DeepEqual(got.Forwards[i], tt.want[i]) {
 					t.Fatalf("forward %d = %#v, want %#v", i, got.Forwards[i], tt.want[i])
 				}
 			}
@@ -225,6 +228,7 @@ example.com {
 					Host: "localhost",
 					Port: 3000,
 				},
+				Hostnames: []string{"example.com"},
 			}},
 		},
 		{
@@ -251,6 +255,7 @@ example.com {
         "srv0": {
           "listen": [":443"],
           "routes": [{
+            "match": [{"host": ["api.example.com"]}],
             "handle": [{
               "handler": "reverse_proxy",
               "upstreams": [{"dial": "127.0.0.1:8080"}]
@@ -269,6 +274,7 @@ example.com {
 					Host: "127.0.0.1",
 					Port: 8080,
 				},
+				Hostnames: []string{"api.example.com"},
 			}},
 		},
 		{
@@ -322,7 +328,7 @@ example.com {
 				t.Fatalf("Parse returned %d forwards, want %d: %#v", len(got.Forwards), len(tt.want), got.Forwards)
 			}
 			for i := range tt.want {
-				if got.Forwards[i] != tt.want[i] {
+				if !reflect.DeepEqual(got.Forwards[i], tt.want[i]) {
 					t.Fatalf("forward %d = %#v, want %#v", i, got.Forwards[i], tt.want[i])
 				}
 			}

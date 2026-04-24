@@ -349,8 +349,21 @@ func TestGetTopology(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"run_id":"run-1"`) {
-		t.Fatalf("body = %s", rec.Body.String())
+	var topology TopologyResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &topology); err != nil {
+		t.Fatalf("decode topology: %v", err)
+	}
+	if topology.RunID != "run-1" {
+		t.Fatalf("topology.RunID = %q, want run-1", topology.RunID)
+	}
+	if len(topology.Routes) != 1 {
+		t.Fatalf("len(topology.Routes) = %d, want 1", len(topology.Routes))
+	}
+	if len(topology.Services) < 2 {
+		t.Fatalf("len(topology.Services) = %d, want at least 2", len(topology.Services))
+	}
+	if bytes.Contains(rec.Body.Bytes(), []byte(`"edges":`)) {
+		t.Fatalf("body unexpectedly includes legacy edges: %s", rec.Body.String())
 	}
 }
 
@@ -542,20 +555,6 @@ func TestWatchTopologySendsInitialSnapshot(t *testing.T) {
 	if err := deps.snapshots.Save(ctx, snapA); err != nil {
 		t.Fatalf("save snapshot: %v", err)
 	}
-	if err := deps.edges.Save(ctx, store.TopologyEdge{
-		ID:          "edge-1",
-		RunID:       "run-1",
-		FromNode:    "node-a",
-		FromPort:    80,
-		ToNode:      "node-b",
-		ToPort:      8080,
-		Kind:        store.EdgeKindProxyPass,
-		Resolved:    true,
-		RawUpstream: "http://100.64.0.2:8080",
-	}); err != nil {
-		t.Fatalf("save edge: %v", err)
-	}
-
 	handler := newHandlerForTest(deps, fakeCollectorReader{statuses: []collector.NodeStatus{{NodeName: "node-a", Online: true}}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -568,8 +567,13 @@ func TestWatchTopologySendsInitialSnapshot(t *testing.T) {
 	}()
 
 	waitForBody(t, rec, "event: topology.snapshot")
-	if !strings.Contains(rec.Body.String(), `"run_id":"run-1"`) {
+	if !strings.Contains(rec.Body.String(), `"run_id":"run-1"`) ||
+		!strings.Contains(rec.Body.String(), `"routes":[`) ||
+		!strings.Contains(rec.Body.String(), `"services":[`) {
 		t.Fatalf("body = %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"edges":`) {
+		t.Fatalf("body unexpectedly includes legacy edges: %s", rec.Body.String())
 	}
 	cancel()
 	select {

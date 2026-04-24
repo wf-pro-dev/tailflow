@@ -39,7 +39,7 @@ func (p NginxParser) ParseBundle(mainPath string, files map[string]string) (Pars
 	upstreams := collectNginxUpstreams(bundle)
 	forwards := make([]ForwardAction, 0)
 	warnings := make([]string, 0)
-	walkNginxFile(filepath.Clean(mainPath), bundle, upstreams, nil, &forwards, &warnings)
+	walkNginxFile(filepath.Clean(mainPath), bundle, upstreams, nil, nil, &forwards, &warnings)
 
 	forwards = DedupeForwards(forwards)
 	if len(forwards) == 0 {
@@ -162,15 +162,15 @@ func collectNginxUpstreams(bundle map[string]nginxBundleFile) map[string][]Forwa
 	return upstreams
 }
 
-func walkNginxFile(path string, bundle map[string]nginxBundleFile, upstreams map[string][]ForwardTarget, listeners []Listener, forwards *[]ForwardAction, warnings *[]string) {
+func walkNginxFile(path string, bundle map[string]nginxBundleFile, upstreams map[string][]ForwardTarget, listeners []Listener, hostnames []string, forwards *[]ForwardAction, warnings *[]string) {
 	file, ok := bundle[path]
 	if !ok {
 		return
 	}
-	walkNginxDirectives(path, file.AST.GetDirectives(), bundle, upstreams, listeners, forwards, warnings)
+	walkNginxDirectives(path, file.AST.GetDirectives(), bundle, upstreams, listeners, hostnames, forwards, warnings)
 }
 
-func walkNginxDirectives(currentPath string, directives []gonginxconfig.IDirective, bundle map[string]nginxBundleFile, upstreams map[string][]ForwardTarget, listeners []Listener, forwards *[]ForwardAction, warnings *[]string) {
+func walkNginxDirectives(currentPath string, directives []gonginxconfig.IDirective, bundle map[string]nginxBundleFile, upstreams map[string][]ForwardTarget, listeners []Listener, hostnames []string, forwards *[]ForwardAction, warnings *[]string) {
 	for _, directive := range directives {
 		switch typed := directive.(type) {
 		case *gonginxconfig.Server:
@@ -178,31 +178,32 @@ func walkNginxDirectives(currentPath string, directives []gonginxconfig.IDirecti
 			if len(serverListeners) == 0 {
 				serverListeners = []Listener{{Port: 80}}
 			}
-			walkNginxDirectives(currentPath, typed.GetDirectives(), bundle, upstreams, serverListeners, forwards, warnings)
+			serverHostnames := collectServerNames(currentPath, typed.GetDirectives(), bundle)
+			walkNginxDirectives(currentPath, typed.GetDirectives(), bundle, upstreams, serverListeners, serverHostnames, forwards, warnings)
 			continue
 		case *gonginxconfig.Location:
-			walkNginxDirectives(currentPath, typed.GetDirectives(), bundle, upstreams, listeners, forwards, warnings)
+			walkNginxDirectives(currentPath, typed.GetDirectives(), bundle, upstreams, listeners, hostnames, forwards, warnings)
 			continue
 		}
 
 		if directive.GetName() == "include" {
 			for _, includePath := range includeMatchesFromDirective(currentPath, directive, bundle) {
-				walkNginxFile(includePath, bundle, upstreams, listeners, forwards, warnings)
+				walkNginxFile(includePath, bundle, upstreams, listeners, hostnames, forwards, warnings)
 			}
 			continue
 		}
 
 		if defaultPort, ok := nginxForwardDirectivePorts[directive.GetName()]; ok {
-			appendNginxForwards(listeners, directive, upstreams, defaultPort, forwards)
+			appendNginxForwards(listeners, hostnames, directive, upstreams, defaultPort, forwards)
 		}
 
 		if block := directive.GetBlock(); block != nil {
-			walkNginxDirectives(currentPath, block.GetDirectives(), bundle, upstreams, listeners, forwards, warnings)
+			walkNginxDirectives(currentPath, block.GetDirectives(), bundle, upstreams, listeners, hostnames, forwards, warnings)
 		}
 	}
 }
 
-func appendNginxForwards(listeners []Listener, directive gonginxconfig.IDirective, upstreams map[string][]ForwardTarget, defaultPort uint16, forwards *[]ForwardAction) {
+func appendNginxForwards(listeners []Listener, hostnames []string, directive gonginxconfig.IDirective, upstreams map[string][]ForwardTarget, defaultPort uint16, forwards *[]ForwardAction) {
 	if len(listeners) == 0 {
 		return
 	}
@@ -226,11 +227,52 @@ func appendNginxForwards(listeners []Listener, directive gonginxconfig.IDirectiv
 		}
 		for _, target := range targets {
 			*forwards = append(*forwards, ForwardAction{
-				Listener: listener,
-				Target:   target,
+				Listener:  listener,
+				Target:    target,
+				Hostnames: NormalizeHostnames(hostnames),
 			})
 		}
 	}
+}
+
+func collectServerNames(currentPath string, directives []gonginxconfig.IDirective, bundle map[string]nginxBundleFile) []string {
+	names := make([]string, 0)
+	seen := make(map[string]struct{})
+	var walk func(string, []gonginxconfig.IDirective)
+	walk = func(path string, directives []gonginxconfig.IDirective) {
+		for _, directive := range directives {
+			if directive.GetName() == "include" {
+				for _, includePath := range includeMatchesFromDirective(path, directive, bundle) {
+					file, ok := bundle[includePath]
+					if !ok {
+						continue
+					}
+					walk(includePath, file.AST.GetDirectives())
+				}
+				continue
+			}
+			if directive.GetName() == "server_name" {
+				for _, param := range directive.GetParameters() {
+					value := strings.TrimSpace(param.GetValue())
+					if value == "" || value == "_" {
+						continue
+					}
+					value = strings.ToLower(strings.TrimSuffix(value, "."))
+					if _, ok := seen[value]; ok {
+						continue
+					}
+					seen[value] = struct{}{}
+					names = append(names, value)
+				}
+			}
+			if block := directive.GetBlock(); block != nil {
+				walk(path, block.GetDirectives())
+			}
+		}
+	}
+	walk(currentPath, directives)
+	sort.Strings(names)
+	return names
 }
 
 func collectServerListeners(currentPath string, directives []gonginxconfig.IDirective, bundle map[string]nginxBundleFile) []Listener {

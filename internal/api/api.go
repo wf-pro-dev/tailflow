@@ -137,10 +137,16 @@ type SnapshotSummary struct {
 }
 
 type TopologyResponse struct {
-	RunID     core.ID              `json:"run_id"`
-	Nodes     []TopologyNode       `json:"nodes"`
-	Edges     []store.TopologyEdge `json:"edges"`
-	UpdatedAt core.Timestamp       `json:"updated_at"`
+	RunID     core.ID               `json:"run_id"`
+	Nodes     []TopologyNode        `json:"nodes"`
+	Services  []store.Service       `json:"services"`
+	Runtimes  []store.Runtime       `json:"runtimes"`
+	Exposures []store.Exposure      `json:"exposures"`
+	Routes    []store.Route         `json:"routes"`
+	RouteHops []store.RouteHop      `json:"route_hops"`
+	Evidence  []store.Evidence      `json:"evidence"`
+	Summary   store.TopologySummary `json:"summary"`
+	UpdatedAt core.Timestamp        `json:"updated_at"`
 }
 
 type TopologyNode struct {
@@ -335,12 +341,7 @@ func (h *Handler) getTopology(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err, "failed to load run snapshots")
 		return
 	}
-	edges, err := h.edges.ListByRun(r.Context(), run.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err, "failed to load topology edges")
-		return
-	}
-	edges = visibleTopologyEdges(edges)
+	topologyData := resolver.BuildTopologyData(snapshots)
 
 	statusByName := make(map[core.NodeName]collector.NodeStatus)
 	if statuses, err := h.collector.GetStatus(r.Context()); err == nil {
@@ -357,7 +358,13 @@ func (h *Handler) getTopology(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, TopologyResponse{
 		RunID:     run.ID,
 		Nodes:     nodes,
-		Edges:     edges,
+		Services:  topologyData.Services,
+		Runtimes:  topologyData.Runtimes,
+		Exposures: topologyData.Exposures,
+		Routes:    topologyData.Routes,
+		RouteHops: topologyData.RouteHops,
+		Evidence:  topologyData.Evidence,
+		Summary:   topologyData.Summary,
 		UpdatedAt: run.FinishedAt,
 	})
 }
@@ -368,7 +375,7 @@ func (h *Handler) listEdges(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err, "failed to load edges")
 		return
 	}
-	writeJSON(w, http.StatusOK, visibleTopologyEdges(edges))
+	writeJSON(w, http.StatusOK, routeTopologyEdges(edges))
 }
 
 func (h *Handler) listUnresolvedEdges(w http.ResponseWriter, r *http.Request) {
@@ -377,7 +384,7 @@ func (h *Handler) listUnresolvedEdges(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err, "failed to load unresolved edges")
 		return
 	}
-	writeJSON(w, http.StatusOK, visibleTopologyEdges(edges))
+	writeJSON(w, http.StatusOK, routeTopologyEdges(edges))
 }
 
 func (h *Handler) listRuns(w http.ResponseWriter, r *http.Request) {
@@ -661,7 +668,7 @@ func (h *Handler) sendInitialNodeSnapshot(ctx context.Context, writer *sse.Write
 }
 
 func (h *Handler) sendInitialTopologySnapshot(ctx context.Context, writer *sse.Writer) error {
-	if h.runs == nil || h.snapshots == nil || h.edges == nil {
+	if h.runs == nil || h.snapshots == nil {
 		return writer.Send("topology.snapshot", TopologyResponse{})
 	}
 
@@ -675,12 +682,7 @@ func (h *Handler) sendInitialTopologySnapshot(ctx context.Context, writer *sse.W
 		writer.Error(err.Error())
 		return err
 	}
-	edges, err := h.edges.ListByRun(ctx, run.ID)
-	if err != nil {
-		writer.Error(err.Error())
-		return err
-	}
-	edges = visibleTopologyEdges(edges)
+	topologyData := resolver.BuildTopologyData(snapshots)
 
 	statusByName := make(map[core.NodeName]collector.NodeStatus)
 	if h.collector != nil {
@@ -700,18 +702,24 @@ func (h *Handler) sendInitialTopologySnapshot(ctx context.Context, writer *sse.W
 	return writer.Send("topology.snapshot", TopologyResponse{
 		RunID:     run.ID,
 		Nodes:     nodes,
-		Edges:     edges,
+		Services:  topologyData.Services,
+		Runtimes:  topologyData.Runtimes,
+		Exposures: topologyData.Exposures,
+		Routes:    topologyData.Routes,
+		RouteHops: topologyData.RouteHops,
+		Evidence:  topologyData.Evidence,
+		Summary:   topologyData.Summary,
 		UpdatedAt: run.FinishedAt,
 	})
 }
 
-func visibleTopologyEdges(edges []store.TopologyEdge) []store.TopologyEdge {
+func routeTopologyEdges(edges []store.TopologyEdge) []store.TopologyEdge {
 	if len(edges) == 0 {
 		return edges
 	}
 	filtered := make([]store.TopologyEdge, 0, len(edges))
 	for _, edge := range edges {
-		if edge.Kind == store.EdgeKindServicePublish {
+		if edge.Kind != store.EdgeKindProxyPass {
 			continue
 		}
 		filtered = append(filtered, edge)

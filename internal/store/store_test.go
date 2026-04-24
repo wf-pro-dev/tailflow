@@ -185,7 +185,7 @@ func TestEdgeStore(t *testing.T) {
 		ToNode:      "node-b",
 		ToPort:      8080,
 		Kind:        EdgeKindProxyPass,
-		Resolved:    true,
+		Resolved:    false,
 		RawUpstream: "http://node-b:8080",
 	}
 	latestResolved := TopologyEdge{
@@ -241,7 +241,7 @@ func TestEdgeStore(t *testing.T) {
 		t.Fatalf("ListUnresolved() error = %v", err)
 	}
 	if len(unresolved) != 1 || unresolved[0].ID != latestUnresolved.ID {
-		t.Fatalf("ListUnresolved() = %#v, want unresolved edge", unresolved)
+		t.Fatalf("ListUnresolved() = %#v, want only latest-run unresolved edge", unresolved)
 	}
 }
 
