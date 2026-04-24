@@ -1,7 +1,5 @@
 import { create } from 'zustand'
 import type {
-  EdgeDiff,
-  EdgeEvent,
   ListenPort,
   NodeResponse,
   NodeStatus,
@@ -9,7 +7,6 @@ import type {
   PortBoundEvent,
   PortReleasedEvent,
   SnapshotEvent,
-  TopologyEdge,
   TopologyNodeResponse,
   TopologyResponse,
 } from '../api/types'
@@ -22,7 +19,6 @@ interface TopologyStoreState {
   topologySnapshot: TopologyResponse | null
   portsByNode: Record<string, ListenPort[]>
   nodeStatusByNode: Record<string, NodeStatus>
-  lastEdgeDiff: EdgeDiff | null
   lastAppliedEventName: string | null
   applyNodesSnapshot: (nodes: NodeResponse[]) => void
   applySnapshot: (snapshot: TopologyResponse) => void
@@ -30,21 +26,15 @@ interface TopologyStoreState {
   applyPortBound: (event: PortBoundEvent) => void
   applyPortReleased: (event: PortReleasedEvent) => void
   applyNodeStatus: (eventName: string, event: NodeStatusEvent) => void
-  applyEdgeDiff: (eventName: string, event: EdgeEvent) => void
   reset: () => void
 }
 
 export interface TopologyStoreSummary {
   topologyNodeCount: number
-  topologyEdgeCount: number
+  topologyRouteCount: number
   trackedPortNodeCount: number
   trackedStatusNodeCount: number
   lastAppliedEventName: string | null
-  lastEdgeDiffCounts: {
-    added: number
-    removed: number
-    changed: number
-  }
 }
 
 function portKey(port: ListenPort): string {
@@ -54,18 +44,6 @@ function portKey(port: ListenPort): string {
     port.proto,
     String(port.pid),
     port.process,
-  ].join('|')
-}
-
-function edgeKey(edge: TopologyEdge): string {
-  return [
-    edge.from_node,
-    String(edge.from_port),
-    edge.from_process,
-    edge.from_container,
-    edge.to_service,
-    edge.kind,
-    edge.raw_upstream,
   ].join('|')
 }
 
@@ -81,21 +59,6 @@ function sortPorts(ports: ListenPort[]): ListenPort[] {
       return left.addr.localeCompare(right.addr)
     }
     return left.process.localeCompare(right.process)
-  })
-}
-
-function sortEdges(edges: TopologyEdge[]): TopologyEdge[] {
-  return [...edges].sort((left, right) => {
-    if (left.from_node !== right.from_node) {
-      return left.from_node.localeCompare(right.from_node)
-    }
-    if (left.from_port !== right.from_port) {
-      return left.from_port - right.from_port
-    }
-    if (left.kind !== right.kind) {
-      return left.kind.localeCompare(right.kind)
-    }
-    return left.raw_upstream.localeCompare(right.raw_upstream)
   })
 }
 
@@ -126,38 +89,6 @@ function replaceTopologyNode(
   }
 }
 
-function applyEdgeDiffToSnapshot(
-  topologySnapshot: TopologyResponse | null,
-  event: EdgeEvent,
-): TopologyResponse | null {
-  if (!topologySnapshot) {
-    return null
-  }
-
-  const edgeMap = new Map(
-    topologySnapshot.edges.map((edge) => [edgeKey(edge), edge] as const),
-  )
-
-  const normalizedDiff = normalizeEdgeDiff(event.diff)
-
-  for (const removedEdge of normalizedDiff.removed) {
-    edgeMap.delete(edgeKey(removedEdge))
-  }
-  for (const changedEdge of normalizedDiff.changed) {
-    edgeMap.set(edgeKey(changedEdge), changedEdge)
-  }
-  for (const addedEdge of normalizedDiff.added) {
-    edgeMap.set(edgeKey(addedEdge), addedEdge)
-  }
-
-  return {
-    ...topologySnapshot,
-    edges: sortEdges(
-      [...edgeMap.values()].filter((edge) => edge.kind !== 'service_publish'),
-    ),
-  }
-}
-
 function buildNodeStatusByNode(nodes: NodeResponse[]): Record<string, NodeStatus> {
   return Object.fromEntries(
     nodes.map((node) => [
@@ -170,14 +101,6 @@ function buildNodeStatusByNode(nodes: NodeResponse[]): Record<string, NodeStatus
       },
     ]),
   )
-}
-
-function normalizeEdgeDiff(diff: EdgeDiff): EdgeDiff {
-  return {
-    added: Array.isArray(diff.added) ? diff.added : [],
-    removed: Array.isArray(diff.removed) ? diff.removed : [],
-    changed: Array.isArray(diff.changed) ? diff.changed : [],
-  }
 }
 
 function buildPortsByNode(snapshot: TopologyResponse): Record<string, ListenPort[]> {
@@ -194,7 +117,6 @@ export const useTopologyStore = create<TopologyStoreState>((set, get) => ({
   topologySnapshot: null,
   portsByNode: {},
   nodeStatusByNode: {},
-  lastEdgeDiff: null,
   lastAppliedEventName: null,
 
   applyNodesSnapshot: (nodes) => {
@@ -212,14 +134,12 @@ export const useTopologyStore = create<TopologyStoreState>((set, get) => ({
       ...state,
       topologySnapshot: {
         ...normalizedSnapshot,
-        edges: sortEdges(normalizedSnapshot.edges),
         nodes: normalizedSnapshot.nodes.map((node) => ({
           ...node,
           ports: sortPorts(node.ports),
         })),
       },
       portsByNode: buildPortsByNode(normalizedSnapshot),
-      lastEdgeDiff: null,
       lastAppliedEventName: 'topology.snapshot',
     }))
     logTopologyStoreState('topology.snapshot', get())
@@ -338,27 +258,11 @@ export const useTopologyStore = create<TopologyStoreState>((set, get) => ({
     logTopologyStoreState(eventName, get())
   },
 
-  applyEdgeDiff: (eventName, event) => {
-    const normalizedDiff = normalizeEdgeDiff(event.diff)
-
-    set((state) => ({
-      ...state,
-      topologySnapshot: applyEdgeDiffToSnapshot(state.topologySnapshot, {
-        ...event,
-        diff: normalizedDiff,
-      }),
-      lastEdgeDiff: normalizedDiff,
-      lastAppliedEventName: eventName,
-    }))
-    logTopologyStoreState(eventName, get())
-  },
-
   reset: () => {
     set({
       topologySnapshot: null,
       portsByNode: {},
       nodeStatusByNode: {},
-      lastEdgeDiff: null,
       lastAppliedEventName: null,
     })
   },
@@ -369,14 +273,9 @@ export function selectTopologyStoreSummary(
 ): TopologyStoreSummary {
   return {
     topologyNodeCount: state.topologySnapshot?.nodes.length ?? 0,
-    topologyEdgeCount: state.topologySnapshot?.edges.length ?? 0,
+    topologyRouteCount: state.topologySnapshot?.routes.length ?? 0,
     trackedPortNodeCount: Object.keys(state.portsByNode).length,
     trackedStatusNodeCount: Object.keys(state.nodeStatusByNode).length,
     lastAppliedEventName: state.lastAppliedEventName,
-    lastEdgeDiffCounts: {
-      added: state.lastEdgeDiff?.added.length ?? 0,
-      removed: state.lastEdgeDiff?.removed.length ?? 0,
-      changed: state.lastEdgeDiff?.changed.length ?? 0,
-    },
   }
 }

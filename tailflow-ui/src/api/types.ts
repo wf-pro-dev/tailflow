@@ -100,10 +100,116 @@ export interface TopologyNodeResponse {
   services: SwarmServicePort[]
 }
 
+export type TopologyHealth =
+  | 'healthy'
+  | 'degraded'
+  | 'unresolved'
+  | 'unknown'
+
+export interface Service {
+  id: ID
+  name: string
+  kind: string
+  role?: string
+  primary_node?: NodeName
+  runtime_ids: ID[]
+  exposure_ids: ID[]
+  health?: TopologyHealth
+  tags?: string[]
+  description?: string
+}
+
+export interface Runtime {
+  id: ID
+  service_id: ID
+  node_id: NodeName
+  runtime_kind: string
+  runtime_name: string
+  pid?: number
+  container_id?: string
+  image?: string
+  state?: string
+  ports: number[]
+  network_names?: string[]
+  network_aliases?: string[]
+  health?: TopologyHealth
+  collected_at?: Timestamp
+}
+
+export interface Exposure {
+  id: ID
+  service_id: ID
+  runtime_id?: ID
+  node_id?: NodeName
+  kind: string
+  protocol?: string
+  hostname?: string
+  path_prefix?: string
+  port?: number
+  url?: string
+  is_primary: boolean
+  visibility?: string
+  source?: string
+  gateway_service_id?: ID
+  health?: TopologyHealth
+  resolution_status?: string
+}
+
+export interface Route {
+  id: ID
+  kind: string
+  source_service_id?: ID
+  source_exposure_id?: ID
+  target_service_id?: ID
+  target_runtime_id?: ID
+  display_name: string
+  resolved: boolean
+  health?: TopologyHealth
+  hop_ids: ID[]
+  hostnames?: string[]
+  input?: string
+}
+
+export interface RouteHop {
+  id: ID
+  route_id: ID
+  order: number
+  kind: string
+  from?: string
+  to?: string
+  resolved: boolean
+  health?: TopologyHealth
+  evidence_id?: ID
+}
+
+export interface Evidence {
+  id: ID
+  matched_by: string
+  confidence: string
+  reason?: string
+  raw_value?: string
+  warnings?: string[]
+}
+
+export interface TopologySummary {
+  node_count: number
+  service_count: number
+  runtime_count: number
+  exposure_count: number
+  route_count: number
+  unresolved_route_count: number
+}
+
 export interface TopologyResponse {
   run_id: ID
   nodes: TopologyNodeResponse[]
-  edges: TopologyEdge[]
+  services: Service[]
+  runtimes: Runtime[]
+  exposures: Exposure[]
+  routes: Route[]
+  route_hops: RouteHop[]
+  evidence: Evidence[]
+  summary: TopologySummary
   updated_at: Timestamp
 }
 

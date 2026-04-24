@@ -1,6 +1,6 @@
 import { useEffect, useState, useEffectEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import type { CollectionRun, EdgeEvent, TopologyResponse } from '../api/types'
+import type { CollectionRun, TopologyResponse } from '../api/types'
 import {
   createEventStream,
   type EventStreamStatus,
@@ -14,9 +14,6 @@ import { useTopologyStore } from '../store/topology'
 
 const TOPOLOGY_STREAM_EVENT_NAMES = [
   'topology.snapshot',
-  'topology.edge_added',
-  'topology.edge_removed',
-  'topology.edge_changed',
   'topology.run_completed',
 ] as const
 
@@ -40,7 +37,6 @@ export function useTopologyStream(): TopologyStreamState {
     lastEventName: null,
   })
   const applySnapshot = useTopologyStore((state) => state.applySnapshot)
-  const applyEdgeDiff = useTopologyStore((state) => state.applyEdgeDiff)
 
   const handleTopologySnapshot = useEffectEvent(
     (event: StreamEvent<TopologyResponse>) => {
@@ -55,17 +51,6 @@ export function useTopologyStream(): TopologyStreamState {
       }))
     },
   )
-
-  const handleEdgeEvent = useEffectEvent((event: StreamEvent<EdgeEvent>) => {
-    logTopologyEvent(event)
-    applyEdgeDiff(event.name, event.data)
-    setStreamState((current) => ({
-      ...current,
-      error: null,
-      lastEventId: event.lastEventId,
-      lastEventName: event.name,
-    }))
-  })
 
   const handleRunCompleted = useEffectEvent((event: StreamEvent<CollectionRun>) => {
     logTopologyEvent(event)
@@ -108,11 +93,6 @@ export function useTopologyStream(): TopologyStreamState {
         switch (event.name) {
           case 'topology.snapshot':
             handleTopologySnapshot(event as StreamEvent<TopologyResponse>)
-            break
-          case 'topology.edge_added':
-          case 'topology.edge_removed':
-          case 'topology.edge_changed':
-            handleEdgeEvent(event as StreamEvent<EdgeEvent>)
             break
           case 'topology.run_completed':
             handleRunCompleted(event as StreamEvent<CollectionRun>)

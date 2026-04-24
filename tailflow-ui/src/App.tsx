@@ -18,7 +18,11 @@ import { StatusDot } from './components/shared/StatusDot'
 import { ErrorBoundary } from './components/shared/ErrorBoundary'
 import { ErrorState } from './components/shared/ErrorState'
 import { useTopologyStore } from './store/topology'
-import { filterVisibleTopologyEdges, isSelfTopologyEdge } from './lib/topology'
+import {
+  buildTopologyGraphLinks,
+  filterVisibleTopologyGraphLinks,
+  isLocalTopologyGraphLink,
+} from './lib/topology'
 import { cn } from './lib/utils'
 import { useRenderLoopGuard } from './lib/debug'
 
@@ -124,23 +128,41 @@ export default function App() {
       topology?.nodes.find((node) => node.name === selectedNodeName) ?? null,
     [selectedNodeName, topology?.nodes],
   )
-  const visibleTopologyEdges = useMemo(
-    () => filterVisibleTopologyEdges(topology?.edges),
-    [topology?.edges],
+  const topologyGraphLinks = useMemo(
+    () => buildTopologyGraphLinks(topology),
+    [topology],
   )
-  const localTopologyEdges = useMemo(
-    () => (topology?.edges ?? []).filter(isSelfTopologyEdge),
-    [topology?.edges],
+  const visibleTopologyLinks = useMemo(
+    () => filterVisibleTopologyGraphLinks(topologyGraphLinks),
+    [topologyGraphLinks],
   )
-  const selectedInboundEdges = useMemo(
+  const selectedInboundRoutes = useMemo(
     () =>
-      visibleTopologyEdges.filter((edge) => edge.to_node === selectedNodeName),
-    [selectedNodeName, visibleTopologyEdges],
+      visibleTopologyLinks.filter(
+        (link) =>
+          link.to_node === selectedNodeName &&
+          link.from_node !== selectedNodeName,
+      ),
+    [selectedNodeName, visibleTopologyLinks],
   )
-  const selectedOutboundEdges = useMemo(
+  const selectedLocalRoutes = useMemo(
     () =>
-      visibleTopologyEdges.filter((edge) => edge.from_node === selectedNodeName),
-    [selectedNodeName, visibleTopologyEdges],
+      visibleTopologyLinks.filter(
+        (link) =>
+          isLocalTopologyGraphLink(link) &&
+          link.from_node === selectedNodeName &&
+          link.to_node === selectedNodeName,
+      ),
+    [selectedNodeName, visibleTopologyLinks],
+  )
+  const selectedOutboundRoutes = useMemo(
+    () =>
+      visibleTopologyLinks.filter(
+        (link) =>
+          link.from_node === selectedNodeName &&
+          link.to_node !== selectedNodeName,
+      ),
+    [selectedNodeName, visibleTopologyLinks],
   )
   const isLiveUpdatesPaused =
     nodeStream.status === 'reconnecting' ||
@@ -165,8 +187,8 @@ export default function App() {
     [topology],
   )
   const topologyEdgeCount = useMemo(
-    () => visibleTopologyEdges.length,
-    [visibleTopologyEdges],
+    () => visibleTopologyLinks.length,
+    [visibleTopologyLinks],
   )
   const trackedPortNodeCount = useMemo(
     () => Object.keys(portsByNode).length,
@@ -235,17 +257,17 @@ export default function App() {
       <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <header className="border-b border-zinc-200 bg-white px-6 py-4">
       
-            <div className="flex flex-wrap items-center justify-end gap-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex tems-center gap-3">
               <StreamStatus
                 label="Nodes"
                 status={nodeStream.status}
-                lastEventName={nodeStream.lastEventName}
               />
               <StreamStatus
                 label="Topology"
                 status={topologyStream.status}
-                lastEventName={topologyStream.lastEventName}
               />
+              </div>
               <StoreStatus
                 topologyNodeCount={topologyNodeCount}
                 topologyEdgeCount={topologyEdgeCount}
@@ -311,11 +333,9 @@ export default function App() {
             isOpen={isDetailPanelOpen}
             inventoryNode={selectedNode}
             topologyNode={selectedTopologyNode}
-            inboundEdges={selectedInboundEdges}
-            localEdges={localTopologyEdges.filter(
-              (edge) => edge.from_node === selectedNodeName,
-            )}
-            outboundEdges={selectedOutboundEdges}
+            inboundRoutes={selectedInboundRoutes}
+            localRoutes={selectedLocalRoutes}
+            outboundRoutes={selectedOutboundRoutes}
             onClose={closeDetailPanel}
           />
         </div>
@@ -393,7 +413,6 @@ function SseBoundaryFallback({
 function StreamStatus(props: {
   label: string
   status: 'connecting' | 'open' | 'reconnecting' | 'closed'
-  lastEventName: string | null
 }) {
   const tone =
     props.status === 'open'
@@ -408,9 +427,7 @@ function StreamStatus(props: {
       <span className="text-xs uppercase tracking-[0.16em] text-zinc-500">
         {props.status}
       </span>
-      {props.lastEventName ? (
-        <span className="text-xs text-zinc-500">{props.lastEventName}</span>
-      ) : null}
+      
     </div>
   )
 }
@@ -430,7 +447,7 @@ function StoreStatus(props: {
         {props.topologyNodeCount} nodes
       </span>
       <span className="text-xs text-zinc-600">
-        {props.topologyEdgeCount} edges
+        {props.topologyEdgeCount} routes
       </span>
       <span className="text-xs text-zinc-600">
         {props.trackedPortNodeCount} port sets

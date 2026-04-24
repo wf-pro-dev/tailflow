@@ -1,71 +1,43 @@
 import { useState } from 'react'
-import type { TopologyEdge } from '../../api/types'
-import { formatTopologyEdgeLabel } from '../../lib/topology'
-import { Badge } from '../shared/Badge'
-import { Tooltip } from '../shared/Tooltip'
+import type { TopologyGraphLink } from '../../lib/topology'
+import {
+  formatTopologyEdgePortLabel,
+  formatTopologyGraphLinkLabel,
+} from '../../lib/topology'
 
 interface EdgeListProps {
-  inboundEdges: TopologyEdge[]
-  localEdges: TopologyEdge[]
-  outboundEdges: TopologyEdge[]
+  inboundLinks: TopologyGraphLink[]
+  localLinks: TopologyGraphLink[]
+  outboundLinks: TopologyGraphLink[]
 }
 
 export function EdgeList(props: EdgeListProps) {
-  const [isLocalEdgesOpen, setIsLocalEdgesOpen] = useState(false)
-
   return (
     <section className="space-y-4">
       <div>
         <p className="mt-1 text-sm text-zinc-600">
-          Topology edges involving the selected node.
+          Request routes involving the selected node.
         </p>
       </div>
 
       <EdgeSection
         title="Outbound"
-        emptyMessage="No outbound edges from this node."
-        edges={props.outboundEdges}
+        emptyMessage="No outbound routes from this node."
+        edges={props.outboundLinks}
         direction="outbound"
       />
       <EdgeSection
         title="Inbound"
-        emptyMessage="No inbound edges to this node."
-        edges={props.inboundEdges}
+        emptyMessage="No inbound routes to this node."
+        edges={props.inboundLinks}
         direction="inbound"
       />
-      <div className="space-y-3 rounded-2xl border border-zinc-200 bg-white p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-sm font-medium text-zinc-950">
-              Local edges ({props.localEdges.length})
-            </p>
-
-          </div>
-          <button
-            type="button"
-            onClick={() => setIsLocalEdgesOpen((current) => !current)}
-            className="rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-600 transition hover:border-zinc-400 hover:text-zinc-950"
-          >
-            {isLocalEdgesOpen ? 'Hide' : 'Show'}
-          </button>
-        </div>
-        {isLocalEdgesOpen ? (
-          props.localEdges.length === 0 ? (
-            <p className="text-sm text-zinc-500">No local edges for this node.</p>
-          ) : (
-            <div className="space-y-2">
-              {props.localEdges.map((edge) => (
-                <EdgeCard
-                  key={edge.id}
-                  edge={edge}
-                  direction="outbound"
-                  counterpartLabel={edge.from_node}
-                />
-              ))}
-            </div>
-          )
-        ) : null}
-      </div>
+      <EdgeSection
+        title="Local"
+        emptyMessage="No local routes for this node."
+        edges={props.localLinks}
+        direction="local"
+      />
     </section>
   )
 }
@@ -73,19 +45,49 @@ export function EdgeList(props: EdgeListProps) {
 function EdgeSection(props: {
   title: string
   emptyMessage: string
-  edges: TopologyEdge[]
-  direction: 'inbound' | 'outbound'
+  edges: TopologyGraphLink[]
+  direction: 'inbound' | 'outbound' | 'local'
 }) {
+  const [isOpen, setIsOpen] = useState(props.edges.length > 0)
+
   return (
-    <div className="space-y-2 rounded-2xl border border-zinc-200 bg-white p-4">
-      <p className="text-sm font-medium text-zinc-950">{props.title}</p>
-      {props.edges.length === 0 ? (
-        <p className="text-sm text-zinc-500">{props.emptyMessage}</p>
-      ) : (
-        <div className="space-y-2">
-          {props.edges.map((edge) => (
-            <EdgeCard key={edge.id} edge={edge} direction={props.direction} />
-          ))}
+    <div className="rounded-2xl border border-zinc-200 bg-white">
+      {/* Header — always visible */}
+      <div className="flex items-center gap-3 px-4 py-3">
+        <button
+          type="button"
+          onClick={() => setIsOpen((v) => !v)}
+          className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md border border-zinc-200 bg-zinc-50 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700"
+          aria-label={isOpen ? 'Collapse section' : 'Expand section'}
+        >
+          <svg
+            className={`h-3 w-3 transition-transform duration-200 ${isOpen ? 'rotate-0' : '-rotate-90'}`}
+            viewBox="0 0 12 12"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polyline points="2 4 6 8 10 4" />
+          </svg>
+        </button>
+        <p className="flex-1 text-sm font-medium text-zinc-950">{props.title}</p>
+        <span className="text-xs text-zinc-500">{props.edges.length}</span>
+      </div>
+
+      {/* Collapsible body */}
+      {isOpen && (
+        <div className="space-y-3 border-t border-zinc-100 px-4 pb-4 pt-3">
+          {props.edges.length === 0 ? (
+            <p className="text-sm text-zinc-500">{props.emptyMessage}</p>
+          ) : (
+            <div className="space-y-3">
+              {props.edges.map((edge) => (
+                <EdgeCard key={edge.id} edge={edge} direction={props.direction} />
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -93,74 +95,149 @@ function EdgeSection(props: {
 }
 
 function EdgeCard(props: {
-  edge: TopologyEdge
-  direction: 'inbound' | 'outbound'
-  counterpartLabel?: string
+  edge: TopologyGraphLink
+  direction: 'inbound' | 'outbound' | 'local'
 }) {
-  const counterpart =
-    props.counterpartLabel ??
-    (props.direction === 'outbound'
-      ? props.edge.to_node ||
-      props.edge.to_service ||
-      props.edge.to_container ||
-      props.edge.raw_upstream ||
-      'unresolved'
-      : props.edge.from_node ||
-      props.edge.from_container ||
-      props.edge.raw_upstream ||
-      'unknown')
-  const counterpartPort =
-    props.direction === 'outbound' ? props.edge.to_port : props.edge.from_port
-  const edgeKindLabel = props.edge.kind.split('_').join(' ')
-  const runtimeDiffers =
-    props.direction === 'outbound' &&
-    props.edge.to_service &&
-    !!props.edge.to_runtime_node &&
-    (props.edge.to_runtime_node !== props.edge.to_node ||
-      (!!props.edge.to_runtime_container &&
-        props.edge.to_runtime_container !== props.edge.to_container))
+  const [isOpen, setIsOpen] = useState(false)
+
+  const { edge } = props
+
+  const title =
+    edge.runtime_name ||
+    edge.to_name ||
+    edge.to_service ||
+    edge.to_node ||
+    edge.from_name ||
+    edge.from_node ||
+    edge.input ||
+    'unknown'
+
+  const hosts = Array.isArray(edge.hostnames) ? edge.hostnames : []
+  const firstHost = hosts[0]
+
+  const fromPort = edge.from_port != null
+    ? formatTopologyEdgePortLabel(edge.from_port)
+    : '—'
+  const toPort = edge.to_port != null
+    ? formatTopologyEdgePortLabel(edge.to_port)
+    : '—'
+
+  function handleGoTo() {
+    if (firstHost) {
+      window.open(`http://${firstHost}`, '_blank', 'noopener,noreferrer')
+    }
+  }
 
   return (
-    <div className="rounded-xl border border-zinc-100 bg-canvas px-3 py-3">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-medium text-zinc-950">{counterpart}</p>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <Badge
-              tone={
-                props.edge.kind === 'proxy_pass'
-                  ? 'warning'
-                  : props.edge.kind === 'service_publish'
-                    ? 'online'
-                    : 'neutral'
-              }
-            >
-              {edgeKindLabel}
-            </Badge>
-            <Tooltip
-              content={props.edge.raw_upstream || formatTopologyEdgeLabel(props.edge)}
-            >
-              <span className="text-xs text-zinc-500">
-                {formatTopologyEdgeLabel(props.edge)}
-              </span>
-            </Tooltip>
+    <article className="rounded-2xl border border-zinc-100 bg-canvas p-4">
+      {/* Clickable header row */}
+        <button
+          type="button"
+          onClick={() => setIsOpen((v) => !v)}
+          className="flex w-full items-center overflow-hidden  gap-3  pt-4 text-left"
+        >
+          <svg
+            className={`mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-zinc-400 transition-transform duration-200 ${isOpen ? 'rotate-0' : '-rotate-90'}`}
+            viewBox="0 0 12 12"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polyline points="2 4 6 8 10 4" />
+          </svg>
+          <div className="min-w-0 flex-1">
+            <p className="text-base font-medium text-zinc-950">{title}</p>
+            <p className="mt-0.5 break-words text-xs leading-5 text-zinc-500">
+              {props.direction === 'outbound' ? `to ${edge.to_node}` : props.direction === 'inbound' ? `from ${edge.from_node}` : edge.to_node}
+            </p>
           </div>
-          {props.edge.kind === 'proxy_pass' && (props.edge.to_service || props.edge.to_runtime_node) ? (
-            <div className="mt-2 space-y-1 text-xs text-zinc-500">
+        </button>
 
-              {props.edge.to_runtime_container ? (
-                runtimeDiffers ? (
-                  <p>Service {props.edge.to_service}</p>
-
-                ) : <p className="text-zinc-400"> Running {props.edge.to_runtime_container} </p>
-              ) : (
-                <p>Service {props.edge.to_service}</p>
-              )}
-            </div>
-          ) : null}
+      {/* Port row — always visible */}
+      <div className="mt-3 flex gap-3">
+        <div className="flex flex-1 flex-col gap-1 rounded-xl bg-white border border-zinc-100 px-3 py-2">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
+            From Port
+          </p>
+          <p className="text-sm font-medium text-zinc-700">{fromPort}</p>
         </div>
-        <Badge className="justify-center">{counterpartPort || 'n/a'}</Badge>
+
+        <div className="flex flex-1 flex-col gap-1 rounded-xl bg-white border border-zinc-100 px-3 py-2">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
+            To Port
+          </p>
+          <p className="text-sm font-medium text-zinc-700">{toPort}</p>
+        </div>
       </div>
+
+
+      {/* Expanded metadata */}
+      {isOpen && (
+        <div className="mt-3 space-y-2 text-sm">
+          {edge.input && <MetadataRow label="Input" value={edge.input} />}
+          {edge.runtime_name && (
+            <MetadataRow label="Runtime" value={edge.runtime_name} />
+          )}
+          {edge.evidence_label && (
+            <MetadataRow label="Matched by" value={edge.evidence_label} />
+          )}
+          {hosts.length > 0 && (
+            <MetadataRow label="Hosts" value={hosts.join(', ')} multiline />
+          )}
+        </div>
+      )}
+
+      {/* Footer — always visible */}
+      <div className="mt-3 flex flex-1 items-center justify-end border-t border-zinc-300 py-3">
+        <button
+          type="button"
+          onClick={handleGoTo}
+          disabled={!firstHost}
+          className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-zinc-200 bg-white py-2 text-xs font-medium text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Go to
+          <svg
+            className="h-3 w-3"
+            viewBox="0 0 12 12"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M2 10L10 2M10 2H5.5M10 2V6.5" />
+          </svg>
+        </button>
+      </div>
+    </article>
+  )
+}
+
+function MetadataRow(props: {
+  label: string
+  value: string
+  multiline?: boolean
+}) {
+  return (
+    <div className="space-y-1">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
+        {props.label}
+      </p>
+      <p
+        className={
+          props.multiline
+            ? 'break-words text-sm leading-5 text-zinc-700'
+            : 'text-sm text-zinc-700'
+        }
+      >
+        {props.value}
+      </p>
     </div>
   )
+}
+
+function formatEndpoint(name: string, node: string, port: number): string {
+  return `${name || node || 'unknown'}:${formatTopologyEdgePortLabel(port)}`
 }

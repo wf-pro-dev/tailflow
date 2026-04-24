@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import type { NodeResponse, TopologyEdge, TopologyNodeResponse } from '../../api/types'
+import type { NodeResponse, TopologyNodeResponse } from '../../api/types'
+import type { TopologyGraphLink } from '../../lib/topology'
 import { getNodeStatusView } from '../../lib/node-status'
 import { formatRelativeTime, formatTimestamp } from '../../lib/time'
 import { isStale } from '../../lib/stale'
@@ -15,13 +16,13 @@ interface DetailPanelProps {
   isOpen: boolean
   inventoryNode: NodeResponse | null
   topologyNode: TopologyNodeResponse | null
-  inboundEdges: TopologyEdge[]
-  localEdges: TopologyEdge[]
-  outboundEdges: TopologyEdge[]
+  inboundRoutes: TopologyGraphLink[]
+  localRoutes: TopologyGraphLink[]
+  outboundRoutes: TopologyGraphLink[]
   onClose: () => void
 }
 
-type DetailTab = 'ports' | 'containers' | 'edges' | 'proxy'
+type DetailTab = 'ports' | 'containers' | 'routes' | 'proxy'
 
 export function DetailPanel(props: DetailPanelProps) {
   useRenderLoopGuard('DetailPanel')
@@ -135,9 +136,9 @@ export function DetailPanel(props: DetailPanelProps) {
             onClick={() => setActiveTab('containers')}
           />
           <TabButton
-            label="Edges"
-            isActive={activeTab === 'edges'}
-            onClick={() => setActiveTab('edges')}
+            label="Routes"
+            isActive={activeTab === 'routes'}
+            onClick={() => setActiveTab('routes')}
           />
           <TabButton
             label="Proxy"
@@ -154,11 +155,11 @@ export function DetailPanel(props: DetailPanelProps) {
         {activeTab === 'containers' ? (
           <ContainerTable containers={props.topologyNode?.containers ?? []} />
         ) : null}
-        {activeTab === 'edges' ? (
+        {activeTab === 'routes' ? (
           <EdgeList
-            inboundEdges={props.inboundEdges}
-            localEdges={props.localEdges}
-            outboundEdges={props.outboundEdges}
+            inboundLinks={props.inboundRoutes}
+            localLinks={props.localRoutes}
+            outboundLinks={props.outboundRoutes}
             key={props.selectedNodeName}
           />
         ) : null}

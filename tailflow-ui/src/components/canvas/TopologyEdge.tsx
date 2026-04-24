@@ -6,29 +6,27 @@ import {
   type EdgeProps,
 } from '@xyflow/react'
 import type { TopologyCanvasEdgeData } from './layout'
-import { formatTopologyEdgeEndpointText } from '../../lib/topology'
+import { formatTopologyGraphLinkEndpointText } from '../../lib/topology'
 import { cn } from '../../lib/utils'
 
 function buildSelfLoopPath(
   sourceX: number,
   sourceY: number,
+  targetX: number,
+  targetY: number,
 ): { path: string; labelX: number; labelY: number } {
-  const startX = sourceX
-  const startY = sourceY - 6
-  const loopWidth = 48
-  const loopHeight = 56
-  const labelX = startX + loopWidth * 0.15
-  const labelY = startY - loopHeight - 8
+  const labelX = (sourceX + targetX) / 2
+  const labelY = Math.max(sourceY, targetY) + 36
 
   return {
-    path: [
-      `M ${startX} ${startY}`,
-      `C ${startX + loopWidth} ${startY - 10}, ${startX + loopWidth} ${startY - loopHeight}, ${startX} ${startY - loopHeight}`,
-      `C ${startX - 14} ${startY - loopHeight}, ${startX - 14} ${startY - 16}, ${startX} ${startY + 4}`,
-    ].join(' '),
+    path: `M ${sourceX} ${sourceY} L ${targetX} ${targetY}`,
     labelX,
     labelY,
   }
+}
+
+function handleGoTo(hostname: string) {
+  window.open(`http://${hostname}`, '_blank', 'noopener,noreferrer')
 }
 
 function buildParallelPath(
@@ -69,16 +67,16 @@ export function TopologyEdge(props: EdgeProps) {
   const parallelOffset = data.parallelOffset ?? 0
 
   const edgeGeometry = isSelfLoop
-    ? buildSelfLoopPath(props.sourceX, props.sourceY)
+    ? buildSelfLoopPath(props.sourceX, props.sourceY, props.targetX, props.targetY)
     : parallelCount > 1
       ? buildParallelPath(
-          props.sourceX,
-          props.sourceY,
-          props.targetX,
-          props.targetY,
-          parallelOffset,
-        )
-    : (() => {
+        props.sourceX,
+        props.sourceY,
+        props.targetX,
+        props.targetY,
+        parallelOffset,
+      )
+      : (() => {
         const [path, labelX, labelY] = getBezierPath({
           sourceX: props.sourceX,
           sourceY: props.sourceY,
@@ -113,18 +111,23 @@ export function TopologyEdge(props: EdgeProps) {
 
   return (
     <>
-      <BaseEdge
-        path={edgeGeometry.path}
-        markerEnd={props.markerEnd}
-        style={{
-          stroke: isCyclic ? '#f59e0b' : '#a1a1aa',
-          strokeWidth: isCyclic ? 2 : 1.5,
-        }}
-      />
+      {!isSelfLoop ? (
+        <BaseEdge
+          path={edgeGeometry.path}
+          markerEnd={props.markerEnd}
+          style={{
+            stroke: isCyclic ? '#f59e0b' : '#a1a1aa',
+            strokeWidth: isCyclic ? 2 : 1.5,
+          }}
+        />
+      ) : null}
       {data.sourceEndpoint ? (
         <EdgeLabelRenderer>
           <div
-            className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+            className={cn(
+              "absolute -translate-x-1/2 pointer-events-none",
+              isSelfLoop ? 'translate-y-[250%]' : '-translate-y-1/2'
+            )}
             style={{
               left: `${edgeGeometry.labelX}px`,
               top: `${edgeGeometry.labelY}px`,
@@ -134,37 +137,46 @@ export function TopologyEdge(props: EdgeProps) {
               <button
                 type="button"
                 onClick={() => setIsOpen((current) => !current)}
-                className={cn(
-                  'nodrag nopan rounded-full border bg-white/95 px-3 py-1.5 text-[10px] font-semibold tracking-[0.04em] shadow-[0_1px_3px_rgba(0,0,0,0.08)] backdrop-blur',
-                  isCyclic
-                    ? 'border-amber-200 text-amber-700'
-                    : 'border-zinc-200 text-zinc-700',
-                )}
+                className='
+                nodrag 
+                nopan 
+                rounded-full
+                border bg-white/95 border-zinc-200 
+                text-zinc-700 px-3 py-1.5 text-[10px] 
+                font-semibold 
+                tracking-[0.04em] shadow-[0_1px_3px_rgba(0,0,0,0.08)] backdrop-blur'
               >
-                {data.sourceEndpoint.name}
+                {`${data.endpointCount ?? 0} endpoint${(data.endpointCount ?? 0) === 1 ? '' : 's'}`}
               </button>
-              {isOpen ? (
+              {isOpen && Array.isArray(data.hostnames) && data.hostnames.length > 0 ? (
                 <div
-                  className={cn(
-                    'absolute left-1/2 top-full z-10 mt-2 min-w-[12rem] -translate-x-1/2 rounded-xl border bg-white/98 p-3 shadow-[0_4px_18px_rgba(0,0,0,0.12)] backdrop-blur',
-                    isCyclic
-                      ? 'border-amber-200'
-                      : 'border-zinc-200',
-                  )}
+                  className='
+                  absolute 
+                  left-1/2 
+                  top-full 
+                  border-zinc-200 
+                  z-10 mt-2 min-w-[12rem] 
+                  -translate-x-1/2 
+                  rounded-xl 
+                  border bg-white/98 
+                  p-3 shadow-[0_4px_18px_rgba(0,0,0,0.12)] backdrop-blur'
+                    
                 >
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
-                    Endpoints
-                  </p>
-                  <div className="mt-2 space-y-1.5">
-                    {(data.popoverItems ?? []).map((item, index) => (
-                      <div
-                        key={`${item.name}:${item.portLabel}:${index}`}
-                        className="rounded-lg bg-canvas px-2.5 py-2 text-[11px] font-medium leading-4 text-zinc-700"
+
+
+                  <div className="flex flex-col space-y-1.5">
+                    {data.hostnames.map((hostname, index) => (
+                      <button
+                        key={`${hostname}:${index}`}
+                        type="button"
+                        onClick={() => handleGoTo(hostname)}
+                        className="flex flex-1 items-center justify-center rounded-lg border border-zinc-200 bg-white p-2 text-xs font-medium text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-40"
                       >
-                        {formatTopologyEdgeEndpointText(item)}
-                      </div>
+                        {hostname}
+                      </button>
                     ))}
                   </div>
+
                 </div>
               ) : null}
             </div>

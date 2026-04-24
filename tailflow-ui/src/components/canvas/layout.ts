@@ -2,17 +2,18 @@ import dagre from '@dagrejs/dagre'
 import { Position, type Edge, type Node } from '@xyflow/react'
 import type {
   NodeResponse,
-  TopologyEdge,
   TopologyNodeResponse,
   TopologyResponse,
 } from '../../api/types'
 import { formatRelativeTime } from '../../lib/time'
 import { getNodeStatusView } from '../../lib/node-status'
 import {
-  buildTopologyEdgeEndpointLabel,
+  buildTopologyGraphLinkEndpointLabel,
+  buildTopologyGraphLinks,
   formatTopologyEdgePortLabel,
-  isVisibleTopologyEdge,
-  type TopologyEdgeEndpointLabel,
+  filterVisibleTopologyGraphLinks,
+  type TopologyGraphLink,
+  type TopologyGraphLinkEndpointLabel,
 } from '../../lib/topology'
 import { isStale } from '../../lib/stale'
 import { partitionCyclicEdges } from './cycleDetection'
@@ -39,10 +40,12 @@ export interface TopologyCanvasNodeData extends Record<string, unknown> {
 }
 
 export interface TopologyCanvasEdgeData extends Record<string, unknown> {
-  topologyEdge: TopologyEdge
-  sourceEndpoint: TopologyEdgeEndpointLabel
-  targetEndpoint: TopologyEdgeEndpointLabel
-  popoverItems: TopologyEdgeEndpointLabel[]
+  topologyEdge: TopologyGraphLink
+  sourceEndpoint: TopologyGraphLinkEndpointLabel
+  targetEndpoint: TopologyGraphLinkEndpointLabel
+  popoverItems: TopologyGraphLinkEndpointLabel[]
+  hostnames: string[]
+  endpointCount: number
   isCyclic: boolean
   isSelfLoop: boolean
   parallelIndex: number
@@ -57,9 +60,10 @@ interface BuildCanvasLayoutOptions {
 }
 
 interface CollapsedCanvasEdgeGroup {
-  representativeEdge: TopologyEdge
+  representativeEdge: TopologyGraphLink
   isCyclic: boolean
-  popoverItems: TopologyEdgeEndpointLabel[]
+  popoverItems: TopologyGraphLinkEndpointLabel[]
+  hostnames: string[]
 }
 
 function buildSourceHandleId(edgeId: string): string {
@@ -70,8 +74,8 @@ function buildTargetHandleId(edgeId: string): string {
   return `edge-target:${edgeId}`
 }
 
-function buildSharedSourceHandleId(edge: TopologyEdge): string {
-  const sourceEndpoint = buildTopologyEdgeEndpointLabel(edge, 'source')
+function buildSharedSourceHandleId(edge: TopologyGraphLink): string {
+  const sourceEndpoint = buildTopologyGraphLinkEndpointLabel(edge, 'source')
 
   return buildSourceHandleId(
     `${edge.from_node}:${sourceEndpoint.name}:${sourceEndpoint.portLabel}`,
@@ -148,9 +152,11 @@ function buildCanvasEdge(
     targetHandle: buildTargetHandleId(edge.id),
     data: {
       topologyEdge: edge,
-      sourceEndpoint: buildTopologyEdgeEndpointLabel(edge, 'source'),
-      targetEndpoint: buildTopologyEdgeEndpointLabel(edge, 'target'),
+      sourceEndpoint: buildTopologyGraphLinkEndpointLabel(edge, 'source'),
+      targetEndpoint: buildTopologyGraphLinkEndpointLabel(edge, 'target'),
       popoverItems: edgeGroup.popoverItems,
+      hostnames: edgeGroup.hostnames,
+      endpointCount: edgeGroup.popoverItems.length,
       isCyclic: edgeGroup.isCyclic,
       isSelfLoop: edge.from_node === edge.to_node,
       parallelIndex,
@@ -199,8 +205,8 @@ function annotateParallelEdges(
 }
 
 function compareEdgesForHandle(
-  edgeA: TopologyEdge,
-  edgeB: TopologyEdge,
+  edgeA: TopologyGraphLink,
+  edgeB: TopologyGraphLink,
   direction: 'source' | 'target',
 ): number {
   const counterpartA =
@@ -225,11 +231,11 @@ function compareEdgesForHandle(
 }
 
 function buildCollapsedEdgeGroups(
-  entries: Array<{ edge: TopologyEdge; isCyclic: boolean }>,
+  entries: Array<{ edge: TopologyGraphLink; isCyclic: boolean }>,
 ): CollapsedCanvasEdgeGroup[] {
   const groupedEntries = new Map<
     string,
-    Array<{ edge: TopologyEdge; isCyclic: boolean }>
+    Array<{ edge: TopologyGraphLink; isCyclic: boolean }>
   >()
 
   for (const entry of entries) {
@@ -264,7 +270,7 @@ function buildCollapsedEdgeGroups(
     const popoverItems = Array.from(
       new Map(
         sortedGroup.map(({ edge }) => {
-          const targetEndpoint = buildTopologyEdgeEndpointLabel(edge, 'target')
+          const targetEndpoint = buildTopologyGraphLinkEndpointLabel(edge, 'target')
 
           return [
             `${targetEndpoint.name}:${formatTopologyEdgePortLabel(edge.to_port)}`,
@@ -273,11 +279,17 @@ function buildCollapsedEdgeGroups(
         }),
       ).values(),
     )
+    const hostnames = Array.from(
+      new Set(
+        sortedGroup.flatMap(({ edge }) => edge.hostnames ?? []),
+      ),
+    ).sort((left, right) => left.localeCompare(right))
 
     collapsedGroups.push({
       representativeEdge: representativeEntry.edge,
       isCyclic: representativeEntry.isCyclic,
       popoverItems,
+      hostnames,
     })
   }
 
@@ -310,8 +322,8 @@ function buildNodeHandleMap(
     string,
     { sourceHandles: TopologyCanvasHandle[]; targetHandles: TopologyCanvasHandle[] }
   >()
-  const outboundEdgesByNode = new Map<string, TopologyEdge[]>()
-  const inboundEdgesByNode = new Map<string, TopologyEdge[]>()
+  const outboundEdgesByNode = new Map<string, TopologyGraphLink[]>()
+  const inboundEdgesByNode = new Map<string, TopologyGraphLink[]>()
 
   for (const nodeId of nodeIds) {
     handleMap.set(nodeId, {
@@ -378,11 +390,10 @@ export function buildCanvasLayout(
 
   const topologyNodeIds = options.topology.nodes.map((node) => node.name)
   const validNodeIds = new Set(topologyNodeIds)
-  const layoutEdges = options.topology.edges.filter(
+  const layoutEdges = filterVisibleTopologyGraphLinks(
+    buildTopologyGraphLinks(options.topology),
+  ).filter(
     (edge) =>
-      isVisibleTopologyEdge(edge) &&
-      edge.from_node.length > 0 &&
-      edge.to_node.length > 0 &&
       validNodeIds.has(edge.from_node) &&
       validNodeIds.has(edge.to_node),
   )

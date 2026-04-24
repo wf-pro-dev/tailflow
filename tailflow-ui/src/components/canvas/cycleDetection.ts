@@ -1,21 +1,21 @@
-import type { TopologyEdge } from '../../api/types'
+import type { TopologyGraphLink } from '../../lib/topology'
 
 export interface PartitionedEdges {
-  dagreEdges: TopologyEdge[]
-  cyclicEdges: TopologyEdge[]
+  dagreEdges: TopologyGraphLink[]
+  cyclicEdges: TopologyGraphLink[]
 }
 
-function edgeSort(left: TopologyEdge, right: TopologyEdge): number {
+function edgeSort(left: TopologyGraphLink, right: TopologyGraphLink): number {
   if (left.from_node !== right.from_node) {
     return left.from_node.localeCompare(right.from_node)
+  }
+  if (left.to_node !== right.to_node) {
+    return left.to_node.localeCompare(right.to_node)
   }
   if (left.from_port !== right.from_port) {
     return left.from_port - right.from_port
   }
-  if (left.kind !== right.kind) {
-    return left.kind.localeCompare(right.kind)
-  }
-  return left.raw_upstream.localeCompare(right.raw_upstream)
+  return left.display_name.localeCompare(right.display_name)
 }
 
 function hasPath(
@@ -46,10 +46,10 @@ function hasPath(
   return false
 }
 
-export function partitionCyclicEdges(edges: TopologyEdge[]): PartitionedEdges {
+export function partitionCyclicEdges(edges: TopologyGraphLink[]): PartitionedEdges {
   const sortedEdges = [...edges].sort(edgeSort)
-  const dagreEdges: TopologyEdge[] = []
-  const cyclicEdges: TopologyEdge[] = []
+  const dagreEdges: TopologyGraphLink[] = []
+  const cyclicEdges: TopologyGraphLink[] = []
   const adjacency = new Map<string, Set<string>>()
 
   for (const edge of sortedEdges) {
