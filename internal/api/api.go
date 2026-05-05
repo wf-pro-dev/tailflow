@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -14,26 +13,14 @@ import (
 	"github.com/wf-pro-dev/tailflow/internal/collector"
 	"github.com/wf-pro-dev/tailflow/internal/core"
 	"github.com/wf-pro-dev/tailflow/internal/parser"
-	"github.com/wf-pro-dev/tailflow/internal/resolver"
 	"github.com/wf-pro-dev/tailflow/internal/sse"
 	"github.com/wf-pro-dev/tailflow/internal/store"
+	"github.com/wf-pro-dev/tailflow/internal/topology"
 	"github.com/wf-pro-dev/tailkit"
 )
 
 func Init() {
 	tailkit.TTL = 10 * time.Second
-}
-
-type runStore interface {
-	store.RunStore
-}
-
-type snapshotStore interface {
-	store.SnapshotStore
-}
-
-type edgeStore interface {
-	store.EdgeStore
 }
 
 type proxyConfigStore interface {
@@ -43,42 +30,43 @@ type proxyConfigStore interface {
 type collectorReader interface {
 	GetStatus(context.Context) ([]collector.NodeStatus, error)
 	PreviewProxyConfig(context.Context, core.NodeName, string, string) (string, map[string]string, parser.ParseResult, error)
+	LatestSnapshot(core.NodeName) (store.NodeSnapshot, bool)
+	Snapshots() []store.NodeSnapshot
+	LocalTailscaleIP(context.Context) (string, error)
 }
 
-type triggerer interface {
-	Trigger()
+type topologyReader interface {
+	Snapshot() topology.Snapshot
+}
+
+type refreshTrigger interface {
+	RefreshNow(context.Context) error
 }
 
 // Handler wires REST and SSE routes for the tailflow API.
 type Handler struct {
-	runs         runStore
-	snapshots    snapshotStore
-	edges        edgeStore
 	proxyConfigs proxyConfigStore
 	collector    collectorReader
-	scheduler    triggerer
+	topology     topologyReader
+	refresher    refreshTrigger
 	bus          *core.EventBus
 	parsers      parser.Registry
 	mux          *http.ServeMux
 }
 
 func NewHandler(
-	runs runStore,
-	snapshots snapshotStore,
-	edges edgeStore,
 	proxyConfigs proxyConfigStore,
 	collector collectorReader,
-	scheduler triggerer,
+	topology topologyReader,
+	refresher refreshTrigger,
 	bus *core.EventBus,
 	parsers parser.Registry,
 ) http.Handler {
 	h := &Handler{
-		runs:         runs,
-		snapshots:    snapshots,
-		edges:        edges,
 		proxyConfigs: proxyConfigs,
 		collector:    collector,
-		scheduler:    scheduler,
+		topology:     topology,
+		refresher:    refresher,
 		bus:          bus,
 		parsers:      parsers,
 		mux:          http.NewServeMux(),
@@ -94,18 +82,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) routes() {
 	h.mux.HandleFunc("GET /api/v1/nodes", h.listNodes)
 	h.mux.HandleFunc("GET /api/v1/nodes/{name}", h.getNode)
-	h.mux.HandleFunc("GET /api/v1/nodes/{name}/snapshot", h.getLatestSnapshot)
 	h.mux.HandleFunc("GET /api/v1/nodes/stream", h.watchNodes)
 
 	h.mux.HandleFunc("GET /api/v1/topology", h.getTopology)
-	h.mux.HandleFunc("GET /api/v1/topology/edges", h.listEdges)
-	h.mux.HandleFunc("GET /api/v1/topology/edges/unresolved", h.listUnresolvedEdges)
 	h.mux.HandleFunc("GET /api/v1/topology/stream", h.watchTopology)
-
-	h.mux.HandleFunc("GET /api/v1/runs", h.listRuns)
-	h.mux.HandleFunc("GET /api/v1/runs/{id}", h.getRun)
-	h.mux.HandleFunc("GET /api/v1/runs/{id}/snapshots", h.listRunSnapshots)
-	h.mux.HandleFunc("POST /api/v1/runs", h.triggerRun)
 
 	h.mux.HandleFunc("GET /api/v1/configs", h.listProxyConfigs)
 	h.mux.HandleFunc("GET /api/v1/configs/{id}", h.getProxyConfig)
@@ -136,32 +116,10 @@ type SnapshotSummary struct {
 	ForwardCount   int            `json:"forward_count"`
 }
 
-type TopologyResponse struct {
-	RunID     core.ID               `json:"run_id"`
-	Nodes     []TopologyNode        `json:"nodes"`
-	Services  []store.Service       `json:"services"`
-	Runtimes  []store.Runtime       `json:"runtimes"`
-	Exposures []store.Exposure      `json:"exposures"`
-	Routes    []store.Route         `json:"routes"`
-	RouteHops []store.RouteHop      `json:"route_hops"`
-	Evidence  []store.Evidence      `json:"evidence"`
-	Summary   store.TopologySummary `json:"summary"`
-	UpdatedAt core.Timestamp        `json:"updated_at"`
-}
-
-type TopologyNode struct {
-	Name              core.NodeName            `json:"name"`
-	TailscaleIP       string                   `json:"tailscale_ip"`
-	Online            bool                     `json:"online"`
-	Degraded          bool                     `json:"degraded"`
-	CollectorDegraded bool                     `json:"collector_degraded"`
-	WorkloadDegraded  bool                     `json:"workload_degraded"`
-	CollectorError    string                   `json:"collector_error,omitempty"`
-	WorkloadIssues    []string                 `json:"workload_issues,omitempty"`
-	Ports             []store.ListenPort       `json:"ports"`
-	Containers        []store.Container        `json:"containers"`
-	Services          []store.SwarmServicePort `json:"services"`
-}
+type TopologyResponse = topology.Snapshot
+type TopologyNode = topology.Node
+type TopologyPatch = topology.Patch
+type TopologyReset = topology.Reset
 
 type SetProxyConfigRequest struct {
 	Kind       string `json:"kind"`
@@ -178,17 +136,13 @@ type ParsedProxyConfigResponse struct {
 	Parsed parser.ParseResult      `json:"parsed"`
 }
 
-type TriggerRunResponse struct {
-	Accepted  bool           `json:"accepted"`
-	StartedAt core.Timestamp `json:"started_at"`
-}
-
 type HealthResponse struct {
 	Status                     string         `json:"status"`
 	NodeCount                  int            `json:"node_count"`
 	CollectorDegradedNodeCount int            `json:"collector_degraded_node_count"`
 	WorkloadDegradedNodeCount  int            `json:"workload_degraded_node_count"`
-	LastRunAt                  core.Timestamp `json:"last_run_at"`
+	UpdatedAt                  core.Timestamp `json:"updated_at"`
+	TopologyVersion            uint64         `json:"topology_version"`
 	TailnetIP                  string         `json:"tailnet_ip"`
 }
 
@@ -243,12 +197,8 @@ func (h *Handler) buildNodeResponse(ctx context.Context, status collector.NodeSt
 		LastSeenAt:        status.LastSeenAt,
 		CollectorError:    status.LastError,
 	}
-	if h.snapshots == nil {
-		return node
-	}
-
-	snapshot, err := h.snapshots.LatestByNode(ctx, status.NodeName)
-	if err != nil {
+	snapshot, ok := h.collector.LatestSnapshot(status.NodeName)
+	if !ok {
 		return node
 	}
 
@@ -266,23 +216,6 @@ func (h *Handler) buildNodeResponse(ctx context.Context, status collector.NodeSt
 	node.WorkloadIssues = workload.Issues
 	node.Degraded = node.Degraded || workload.Degraded
 	return node
-}
-
-func buildTopologyNode(snapshot store.NodeSnapshot, status collector.NodeStatus) TopologyNode {
-	workload := assessWorkload(snapshot)
-	return TopologyNode{
-		Name:              snapshot.NodeName,
-		TailscaleIP:       snapshot.TailscaleIP,
-		Online:            status.Online,
-		Degraded:          status.Degraded || workload.Degraded,
-		CollectorDegraded: status.Degraded,
-		WorkloadDegraded:  workload.Degraded,
-		CollectorError:    status.LastError,
-		WorkloadIssues:    workload.Issues,
-		Ports:             snapshot.Ports,
-		Containers:        snapshot.Containers,
-		Services:          snapshot.Services,
-	}
 }
 
 func (h *Handler) listNodes(w http.ResponseWriter, r *http.Request) {
@@ -319,110 +252,8 @@ func (h *Handler) getNode(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, errors.New("node not found"), "check the node name")
 }
 
-func (h *Handler) getLatestSnapshot(w http.ResponseWriter, r *http.Request) {
-	name := core.NodeName(r.PathValue("name"))
-	snapshot, err := h.snapshots.LatestByNode(r.Context(), name)
-	if err != nil {
-		writeError(w, http.StatusNotFound, err, "check the node name")
-		return
-	}
-	writeJSON(w, http.StatusOK, snapshot)
-}
-
 func (h *Handler) getTopology(w http.ResponseWriter, r *http.Request) {
-	run, err := h.runs.Latest(r.Context())
-	if err != nil {
-		writeError(w, http.StatusNotFound, err, "no collection run is available yet")
-		return
-	}
-
-	snapshots, err := h.snapshots.ListByRun(r.Context(), run.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err, "failed to load run snapshots")
-		return
-	}
-	topologyData := resolver.BuildTopologyData(snapshots)
-
-	statusByName := make(map[core.NodeName]collector.NodeStatus)
-	if statuses, err := h.collector.GetStatus(r.Context()); err == nil {
-		for _, status := range statuses {
-			statusByName[status.NodeName] = status
-		}
-	}
-
-	nodes := make([]TopologyNode, 0, len(snapshots))
-	for _, snapshot := range snapshots {
-		nodes = append(nodes, buildTopologyNode(snapshot, statusByName[snapshot.NodeName]))
-	}
-
-	writeJSON(w, http.StatusOK, TopologyResponse{
-		RunID:     run.ID,
-		Nodes:     nodes,
-		Services:  topologyData.Services,
-		Runtimes:  topologyData.Runtimes,
-		Exposures: topologyData.Exposures,
-		Routes:    topologyData.Routes,
-		RouteHops: topologyData.RouteHops,
-		Evidence:  topologyData.Evidence,
-		Summary:   topologyData.Summary,
-		UpdatedAt: run.FinishedAt,
-	})
-}
-
-func (h *Handler) listEdges(w http.ResponseWriter, r *http.Request) {
-	edges, err := h.edges.LatestEdges(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err, "failed to load edges")
-		return
-	}
-	writeJSON(w, http.StatusOK, routeTopologyEdges(edges))
-}
-
-func (h *Handler) listUnresolvedEdges(w http.ResponseWriter, r *http.Request) {
-	edges, err := h.edges.ListUnresolved(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err, "failed to load unresolved edges")
-		return
-	}
-	writeJSON(w, http.StatusOK, routeTopologyEdges(edges))
-}
-
-func (h *Handler) listRuns(w http.ResponseWriter, r *http.Request) {
-	runs, err := h.runs.List(r.Context(), core.Filter{})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err, "failed to load collection runs")
-		return
-	}
-	writeJSON(w, http.StatusOK, runs)
-}
-
-func (h *Handler) getRun(w http.ResponseWriter, r *http.Request) {
-	run, err := h.runs.Get(r.Context(), core.ID(r.PathValue("id")))
-	if err != nil {
-		writeError(w, http.StatusNotFound, err, "check the run id")
-		return
-	}
-	writeJSON(w, http.StatusOK, run)
-}
-
-func (h *Handler) listRunSnapshots(w http.ResponseWriter, r *http.Request) {
-	snapshots, err := h.snapshots.ListByRun(r.Context(), core.ID(r.PathValue("id")))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err, "failed to load run snapshots")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"snapshots": snapshots})
-}
-
-func (h *Handler) triggerRun(w http.ResponseWriter, r *http.Request) {
-	log.Printf("api: run trigger requested remote=%s", r.RemoteAddr)
-	if h.scheduler != nil {
-		h.scheduler.Trigger()
-	}
-	writeJSON(w, http.StatusAccepted, TriggerRunResponse{
-		Accepted:  true,
-		StartedAt: core.NowTimestamp(),
-	})
+	writeJSON(w, http.StatusOK, h.topology.Snapshot())
 }
 
 func (h *Handler) listProxyConfigs(w http.ResponseWriter, r *http.Request) {
@@ -508,10 +339,12 @@ func (h *Handler) setProxyConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err, "failed to save proxy config")
 		return
 	}
-	if h.scheduler != nil {
-		h.scheduler.Trigger()
+	if h.refresher != nil {
+		if err := h.refresher.RefreshNow(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, err, "failed to refresh topology after saving proxy config")
+			return
+		}
 	}
-
 	writeJSON(w, http.StatusOK, SetProxyConfigResponse{
 		Config:  config,
 		Preview: preview,
@@ -527,6 +360,12 @@ func (h *Handler) deleteProxyConfig(w http.ResponseWriter, r *http.Request) {
 	if err := h.proxyConfigs.Delete(r.Context(), config.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, err, "failed to delete proxy config")
 		return
+	}
+	if h.refresher != nil {
+		if err := h.refresher.RefreshNow(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, err, "failed to refresh topology after deleting proxy config")
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -551,8 +390,11 @@ func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
 	if health.CollectorDegradedNodeCount > 0 || health.WorkloadDegradedNodeCount > 0 {
 		health.Status = "degraded"
 	}
-	if run, err := h.runs.Latest(r.Context()); err == nil {
-		health.LastRunAt = run.FinishedAt
+	snapshot := h.topology.Snapshot()
+	health.UpdatedAt = snapshot.UpdatedAt
+	health.TopologyVersion = snapshot.Version
+	if ip, err := h.collector.LocalTailscaleIP(r.Context()); err == nil {
+		health.TailnetIP = ip
 	}
 	writeJSON(w, http.StatusOK, health)
 }
@@ -586,7 +428,7 @@ func (h *Handler) watchNodes(w http.ResponseWriter, r *http.Request) {
 	if err := h.sendInitialNodeSnapshot(r.Context(), writer); err != nil {
 		return
 	}
-	h.streamTopics(r.Context(), writer, core.TopicNode, core.TopicSnapshot)
+	h.streamTopics(r.Context(), writer, core.TopicNode)
 }
 
 func (h *Handler) watchTopology(w http.ResponseWriter, r *http.Request) {
@@ -597,7 +439,7 @@ func (h *Handler) watchTopology(w http.ResponseWriter, r *http.Request) {
 	if err := h.sendInitialTopologySnapshot(r.Context(), writer); err != nil {
 		return
 	}
-	h.streamTopics(r.Context(), writer, core.TopicEdge, core.TopicSnapshot)
+	h.streamTopics(r.Context(), writer, core.TopicEdge)
 }
 
 func (h *Handler) newStreamWriter(w http.ResponseWriter, r *http.Request) (*sse.Writer, bool) {
@@ -635,15 +477,25 @@ func (h *Handler) streamTopics(ctx context.Context, writer *sse.Writer, topics .
 			switch e := event.(type) {
 			case core.Event[collector.NodeStatusEvent]:
 				_ = writer.Send(e.Name, e.Data)
-			case core.Event[collector.SnapshotEvent]:
+			case core.Event[collector.NodePortsReplacedEvent]:
 				_ = writer.Send(e.Name, e.Data)
 			case core.Event[collector.PortBoundEvent]:
 				_ = writer.Send(e.Name, e.Data)
 			case core.Event[collector.PortReleasedEvent]:
 				_ = writer.Send(e.Name, e.Data)
-			case core.Event[resolver.EdgeEvent]:
+			case core.Event[collector.NodeContainersReplacedEvent]:
 				_ = writer.Send(e.Name, e.Data)
-			case core.Event[store.CollectionRun]:
+			case core.Event[collector.NodeServicesReplacedEvent]:
+				_ = writer.Send(e.Name, e.Data)
+			case core.Event[collector.NodeForwardsReplacedEvent]:
+				_ = writer.Send(e.Name, e.Data)
+			case core.Event[collector.SnapshotEvent]:
+				_ = writer.Send(e.Name, e.Data)
+			case core.Event[topology.Patch]:
+				_ = writer.Send(e.Name, e.Data)
+			case core.Event[topology.Reset]:
+				_ = writer.Send(e.Name, e.Data)
+			case core.Event[topology.Snapshot]:
 				_ = writer.Send(e.Name, e.Data)
 			default:
 				_ = writer.Send("message", event)
@@ -668,63 +520,7 @@ func (h *Handler) sendInitialNodeSnapshot(ctx context.Context, writer *sse.Write
 }
 
 func (h *Handler) sendInitialTopologySnapshot(ctx context.Context, writer *sse.Writer) error {
-	if h.runs == nil || h.snapshots == nil {
-		return writer.Send("topology.snapshot", TopologyResponse{})
-	}
-
-	run, err := h.runs.Latest(ctx)
-	if err != nil {
-		return writer.Send("topology.snapshot", TopologyResponse{})
-	}
-
-	snapshots, err := h.snapshots.ListByRun(ctx, run.ID)
-	if err != nil {
-		writer.Error(err.Error())
-		return err
-	}
-	topologyData := resolver.BuildTopologyData(snapshots)
-
-	statusByName := make(map[core.NodeName]collector.NodeStatus)
-	if h.collector != nil {
-		if statuses, err := h.collector.GetStatus(ctx); err == nil {
-			for _, status := range statuses {
-				statusByName[status.NodeName] = status
-			}
-		}
-	}
-
-	nodes := make([]TopologyNode, 0, len(snapshots))
-	for _, snapshot := range snapshots {
-		nodes = append(nodes, buildTopologyNode(snapshot, statusByName[snapshot.NodeName]))
-	}
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Name < nodes[j].Name })
-
-	return writer.Send("topology.snapshot", TopologyResponse{
-		RunID:     run.ID,
-		Nodes:     nodes,
-		Services:  topologyData.Services,
-		Runtimes:  topologyData.Runtimes,
-		Exposures: topologyData.Exposures,
-		Routes:    topologyData.Routes,
-		RouteHops: topologyData.RouteHops,
-		Evidence:  topologyData.Evidence,
-		Summary:   topologyData.Summary,
-		UpdatedAt: run.FinishedAt,
-	})
-}
-
-func routeTopologyEdges(edges []store.TopologyEdge) []store.TopologyEdge {
-	if len(edges) == 0 {
-		return edges
-	}
-	filtered := make([]store.TopologyEdge, 0, len(edges))
-	for _, edge := range edges {
-		if edge.Kind != store.EdgeKindProxyPass {
-			continue
-		}
-		filtered = append(filtered, edge)
-	}
-	return filtered
+	return writer.Send(core.EventTopologySnapshot.String(), h.topology.Snapshot())
 }
 
 func merge(ctx context.Context, channels ...<-chan any) <-chan any {

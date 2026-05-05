@@ -170,7 +170,7 @@ func TestBroadcastEvent(t *testing.T) {
 	defer cancel()
 
 	ch := bus.Subscribe(ctx, TopicNode)
-	BroadcastEvent(bus, "node.connected", map[string]string{"name": "node-a"})
+	BroadcastEvent(bus, EventNodeStatusChanged.String(), map[string]string{"name": "node-a"})
 
 	select {
 	case raw := <-ch:
@@ -178,8 +178,8 @@ func TestBroadcastEvent(t *testing.T) {
 		if !ok {
 			t.Fatalf("BroadcastEvent delivered %T, want Event[map[string]string]", raw)
 		}
-		if event.Name != "node.connected" {
-			t.Fatalf("event name = %q, want node.connected", event.Name)
+		if event.Name != EventNodeStatusChanged.String() {
+			t.Fatalf("event name = %q, want %s", event.Name, EventNodeStatusChanged.String())
 		}
 		if event.Data["name"] != "node-a" {
 			t.Fatalf("event data = %#v, want node-a", event.Data)

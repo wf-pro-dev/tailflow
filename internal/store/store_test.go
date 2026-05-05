@@ -10,72 +10,11 @@ import (
 	"github.com/wf-pro-dev/tailflow/internal/parser"
 )
 
-func TestRunStore(t *testing.T) {
-	t.Parallel()
-
-	db := openTestStore(t)
-	repo := db.Runs()
-	ctx := context.Background()
-
-	older := CollectionRun{
-		ID:         "01JOLD00000000000000000000",
-		StartedAt:  core.NewTimestamp(time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC)),
-		FinishedAt: core.NewTimestamp(time.Date(2026, 4, 17, 10, 0, 5, 0, time.UTC)),
-		NodeCount:  1,
-		ErrorCount: 1,
-	}
-	latest := CollectionRun{
-		ID:         "01JNEW00000000000000000000",
-		StartedAt:  core.NewTimestamp(time.Date(2026, 4, 17, 10, 1, 0, 0, time.UTC)),
-		FinishedAt: core.NewTimestamp(time.Date(2026, 4, 17, 10, 1, 5, 0, time.UTC)),
-		NodeCount:  2,
-		ErrorCount: 0,
-	}
-
-	for _, run := range []CollectionRun{older, latest} {
-		if err := repo.Save(ctx, run); err != nil {
-			t.Fatalf("Save() error = %v", err)
-		}
-	}
-
-	got, err := repo.Get(ctx, older.ID)
-	if err != nil {
-		t.Fatalf("Get() error = %v", err)
-	}
-	if got.NodeCount != older.NodeCount {
-		t.Fatalf("Get().NodeCount = %d, want %d", got.NodeCount, older.NodeCount)
-	}
-
-	list, err := repo.List(ctx, core.Filter{Limit: 1})
-	if err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
-	if len(list) != 1 || list[0].ID != latest.ID {
-		t.Fatalf("List() = %#v, want latest run only", list)
-	}
-
-	gotLatest, err := repo.Latest(ctx)
-	if err != nil {
-		t.Fatalf("Latest() error = %v", err)
-	}
-	if gotLatest.ID != latest.ID {
-		t.Fatalf("Latest().ID = %s, want %s", gotLatest.ID, latest.ID)
-	}
-}
-
 func TestSnapshotStore(t *testing.T) {
 	t.Parallel()
 
 	db := openTestStore(t)
 	ctx := context.Background()
-
-	runRepo := db.Runs()
-	if err := runRepo.Save(ctx, CollectionRun{
-		ID:        "01JRUN00000000000000000000",
-		StartedAt: core.NewTimestamp(time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC)),
-	}); err != nil {
-		t.Fatalf("Run Save() error = %v", err)
-	}
 
 	repo := db.Snapshots()
 	first := NodeSnapshot{

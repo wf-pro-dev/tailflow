@@ -1,12 +1,6 @@
 import { create } from 'zustand'
 import type {
-  ListenPort,
-  NodeResponse,
-  NodeStatus,
-  NodeStatusEvent,
-  PortBoundEvent,
-  PortReleasedEvent,
-  SnapshotEvent,
+  TopologyPatch,
   TopologyNodeResponse,
   TopologyResponse,
 } from '../api/types'
@@ -17,15 +11,10 @@ import {
 
 interface TopologyStoreState {
   topologySnapshot: TopologyResponse | null
-  portsByNode: Record<string, ListenPort[]>
-  nodeStatusByNode: Record<string, NodeStatus>
   lastAppliedEventName: string | null
-  applyNodesSnapshot: (nodes: NodeResponse[]) => void
+  topologyVersion: number
   applySnapshot: (snapshot: TopologyResponse) => void
-  applySnapshotUpdated: (event: SnapshotEvent) => void
-  applyPortBound: (event: PortBoundEvent) => void
-  applyPortReleased: (event: PortReleasedEvent) => void
-  applyNodeStatus: (eventName: string, event: NodeStatusEvent) => void
+  applyTopologyPatch: (patch: TopologyPatch) => void
   reset: () => void
 }
 
@@ -35,78 +24,76 @@ export interface TopologyStoreSummary {
   trackedPortNodeCount: number
   trackedStatusNodeCount: number
   lastAppliedEventName: string | null
+  topologyVersion: number
 }
 
-function portKey(port: ListenPort): string {
-  return [
-    port.addr,
-    String(port.port),
-    port.proto,
-    String(port.pid),
-    port.process,
-  ].join('|')
-}
-
-function sortPorts(ports: ListenPort[]): ListenPort[] {
-  return [...ports].sort((left, right) => {
-    if (left.port !== right.port) {
-      return left.port - right.port
-    }
-    if (left.proto !== right.proto) {
-      return left.proto.localeCompare(right.proto)
-    }
-    if (left.addr !== right.addr) {
-      return left.addr.localeCompare(right.addr)
-    }
-    return left.process.localeCompare(right.process)
-  })
-}
-
-function upsertPort(ports: ListenPort[], nextPort: ListenPort): ListenPort[] {
-  const nextPortKey = portKey(nextPort)
-  const filteredPorts = ports.filter((port) => portKey(port) !== nextPortKey)
-  return sortPorts([...filteredPorts, nextPort])
-}
-
-function removePort(ports: ListenPort[], removedPort: ListenPort): ListenPort[] {
-  return sortPorts(ports.filter((port) => portKey(port) !== portKey(removedPort)))
-}
-
-function replaceTopologyNode(
-  topologySnapshot: TopologyResponse | null,
-  nodeName: string,
-  updater: (node: TopologyNodeResponse) => TopologyNodeResponse,
-): TopologyResponse | null {
-  if (!topologySnapshot) {
-    return null
+function upsertByID<T extends { id: string }>(current: T[], updates: T[]): T[] {
+  const byID = new Map(current.map((value) => [value.id, value]))
+  for (const update of updates) {
+    byID.set(update.id, update)
   }
+  return [...byID.values()]
+}
 
-  return {
+function removeByID<T extends { id: string }>(current: T[], removedIDs: string[]): T[] {
+  if (removedIDs.length === 0) {
+    return current
+  }
+  const removed = new Set(removedIDs)
+  return current.filter((value) => !removed.has(value.id))
+}
+
+function upsertNodes(current: TopologyNodeResponse[], updates: TopologyNodeResponse[]): TopologyNodeResponse[] {
+  const byName = new Map(current.map((node) => [node.name, node]))
+  for (const update of updates) {
+    byName.set(update.name, normalizeTopologyNode(update))
+  }
+  return [...byName.values()].sort((left, right) => left.name.localeCompare(right.name))
+}
+
+function removeNodes(current: TopologyNodeResponse[], removedNames: string[]): TopologyNodeResponse[] {
+  if (removedNames.length === 0) {
+    return current
+  }
+  const removed = new Set(removedNames)
+  return current.filter((node) => !removed.has(node.name))
+}
+
+function patchTopologySnapshot(topologySnapshot: TopologyResponse, patch: TopologyPatch): TopologyResponse {
+  return normalizeTopologyResponse({
     ...topologySnapshot,
-    nodes: topologySnapshot.nodes.map((node) =>
-      node.name === nodeName ? updater(node) : node,
+    version: patch.version,
+    updated_at: patch.updated_at,
+    nodes: removeNodes(
+      upsertNodes(topologySnapshot.nodes, patch.nodes_upserted),
+      patch.nodes_removed,
     ),
-  }
-}
-
-function buildNodeStatusByNode(nodes: NodeResponse[]): Record<string, NodeStatus> {
-  return Object.fromEntries(
-    nodes.map((node) => [
-      node.name,
-      {
-        node_name: node.name,
-        online: node.online,
-        degraded: node.degraded,
-        last_seen_at: node.last_seen_at,
-      },
-    ]),
-  )
-}
-
-function buildPortsByNode(snapshot: TopologyResponse): Record<string, ListenPort[]> {
-  return Object.fromEntries(
-    snapshot.nodes.map((node) => [node.name, sortPorts(node.ports)]),
-  )
+    services: removeByID(
+      upsertByID(topologySnapshot.services, patch.services_upserted),
+      patch.services_removed,
+    ),
+    runtimes: removeByID(
+      upsertByID(topologySnapshot.runtimes, patch.runtimes_upserted),
+      patch.runtimes_removed,
+    ),
+    exposures: removeByID(
+      upsertByID(topologySnapshot.exposures, patch.exposures_upserted),
+      patch.exposures_removed,
+    ),
+    routes: removeByID(
+      upsertByID(topologySnapshot.routes, patch.routes_upserted),
+      patch.routes_removed,
+    ),
+    route_hops: removeByID(
+      upsertByID(topologySnapshot.route_hops, patch.route_hops_upserted),
+      patch.route_hops_removed,
+    ),
+    evidence: removeByID(
+      upsertByID(topologySnapshot.evidence, patch.evidence_upserted),
+      patch.evidence_removed,
+    ),
+    summary: patch.summary,
+  })
 }
 
 function logTopologyStoreState(actionName: string, state: TopologyStoreState) {
@@ -115,155 +102,50 @@ function logTopologyStoreState(actionName: string, state: TopologyStoreState) {
 
 export const useTopologyStore = create<TopologyStoreState>((set, get) => ({
   topologySnapshot: null,
-  portsByNode: {},
-  nodeStatusByNode: {},
   lastAppliedEventName: null,
-
-  applyNodesSnapshot: (nodes) => {
-    set((state) => ({
-      ...state,
-      nodeStatusByNode: buildNodeStatusByNode(nodes),
-      lastAppliedEventName: 'nodes.snapshot',
-    }))
-    logTopologyStoreState('nodes.snapshot', get())
-  },
+  topologyVersion: 0,
 
   applySnapshot: (snapshot) => {
     const normalizedSnapshot = normalizeTopologyResponse(snapshot)
     set((state) => ({
       ...state,
-      topologySnapshot: {
-        ...normalizedSnapshot,
-        nodes: normalizedSnapshot.nodes.map((node) => ({
-          ...node,
-          ports: sortPorts(node.ports),
-        })),
-      },
-      portsByNode: buildPortsByNode(normalizedSnapshot),
+      topologySnapshot: normalizedSnapshot,
       lastAppliedEventName: 'topology.snapshot',
+      topologyVersion: normalizedSnapshot.version,
     }))
     logTopologyStoreState('topology.snapshot', get())
   },
 
-  applySnapshotUpdated: (event) => {
+  applyTopologyPatch: (patch) => {
     set((state) => {
-      const nodeName = event.snapshot.node_name
-      const normalizedNode = normalizeTopologyNode({
-        name: event.snapshot.node_name,
-        tailscale_ip: event.snapshot.tailscale_ip,
-        online: true,
-        ports: event.snapshot.ports,
-        containers: event.snapshot.containers,
-        services: event.snapshot.services,
-      })
-      const nextNodeStatus: NodeStatus = {
-        node_name: nodeName,
-        online: true,
-        degraded: state.nodeStatusByNode[nodeName]?.degraded ?? false,
-        last_seen_at: event.snapshot.collected_at,
-        last_error: event.snapshot.error,
+      if (!state.topologySnapshot) {
+        return {
+          ...state,
+          lastAppliedEventName: 'topology.patch',
+        }
       }
-
+      if (state.topologyVersion > 0 && patch.version !== state.topologyVersion + 1) {
+        return {
+          ...state,
+          lastAppliedEventName: 'topology.patch.out_of_order',
+        }
+      }
+      const nextTopology = patchTopologySnapshot(state.topologySnapshot, patch)
       return {
         ...state,
-        portsByNode: {
-          ...state.portsByNode,
-          [nodeName]: sortPorts(normalizedNode.ports),
-        },
-        nodeStatusByNode: {
-          ...state.nodeStatusByNode,
-          [nodeName]: nextNodeStatus,
-        },
-        topologySnapshot: replaceTopologyNode(
-          state.topologySnapshot,
-          nodeName,
-          (node) => ({
-            ...node,
-            ...normalizedNode,
-          }),
-        ),
-        lastAppliedEventName: 'snapshot.updated',
+        topologySnapshot: nextTopology,
+        lastAppliedEventName: 'topology.patch',
+        topologyVersion: patch.version,
       }
     })
-    logTopologyStoreState('snapshot.updated', get())
-  },
-
-  applyPortBound: (event) => {
-    set((state) => {
-      const currentPorts = state.portsByNode[event.node_name] ?? []
-      const nextPorts = upsertPort(currentPorts, event.port)
-
-      return {
-        ...state,
-        portsByNode: {
-          ...state.portsByNode,
-          [event.node_name]: nextPorts,
-        },
-        topologySnapshot: replaceTopologyNode(
-          state.topologySnapshot,
-          event.node_name,
-          (node) => ({
-            ...node,
-            ports: nextPorts,
-          }),
-        ),
-        lastAppliedEventName: 'port.bound',
-      }
-    })
-    logTopologyStoreState('port.bound', get())
-  },
-
-  applyPortReleased: (event) => {
-    set((state) => {
-      const currentPorts = state.portsByNode[event.node_name] ?? []
-      const nextPorts = removePort(currentPorts, event.port)
-
-      return {
-        ...state,
-        portsByNode: {
-          ...state.portsByNode,
-          [event.node_name]: nextPorts,
-        },
-        topologySnapshot: replaceTopologyNode(
-          state.topologySnapshot,
-          event.node_name,
-          (node) => ({
-            ...node,
-            ports: nextPorts,
-          }),
-        ),
-        lastAppliedEventName: 'port.released',
-      }
-    })
-    logTopologyStoreState('port.released', get())
-  },
-
-  applyNodeStatus: (eventName, event) => {
-    set((state) => ({
-      ...state,
-      nodeStatusByNode: {
-        ...state.nodeStatusByNode,
-        [event.current.node_name]: event.current,
-      },
-      topologySnapshot: replaceTopologyNode(
-        state.topologySnapshot,
-        event.current.node_name,
-        (node) => ({
-          ...node,
-          online: event.current.online,
-        }),
-      ),
-      lastAppliedEventName: eventName,
-    }))
-    logTopologyStoreState(eventName, get())
+    logTopologyStoreState('topology.patch', get())
   },
 
   reset: () => {
     set({
       topologySnapshot: null,
-      portsByNode: {},
-      nodeStatusByNode: {},
       lastAppliedEventName: null,
+      topologyVersion: 0,
     })
   },
 }))
@@ -274,8 +156,13 @@ export function selectTopologyStoreSummary(
   return {
     topologyNodeCount: state.topologySnapshot?.nodes.length ?? 0,
     topologyRouteCount: state.topologySnapshot?.routes.length ?? 0,
-    trackedPortNodeCount: Object.keys(state.portsByNode).length,
-    trackedStatusNodeCount: Object.keys(state.nodeStatusByNode).length,
+    trackedPortNodeCount:
+      state.topologySnapshot?.nodes.filter((node) => node.ports.length > 0).length ??
+      0,
+    trackedStatusNodeCount:
+      state.topologySnapshot?.nodes.filter((node) => node.online || node.collector_degraded).length ??
+      0,
     lastAppliedEventName: state.lastAppliedEventName,
+    topologyVersion: state.topologyVersion,
   }
 }

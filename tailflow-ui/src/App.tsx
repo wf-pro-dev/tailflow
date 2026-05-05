@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useHealth } from './hooks/useHealth'
-import { useNodes } from './hooks/useNodes'
-import { useRuns } from './hooks/useRuns'
 import { useTopology } from './hooks/useTopology'
-import { useTriggerRun } from './hooks/useTriggerRun'
 import { useUiStore } from './store/ui'
-import { useNodeStream } from './sse/useNodeStream'
 import { useTopologyStream } from './sse/useTopologyStream'
 import { isStale } from './lib/stale'
 import { Sidebar } from './components/sidebar/Sidebar'
@@ -25,6 +21,7 @@ import {
 } from './lib/topology'
 import { cn } from './lib/utils'
 import { useRenderLoopGuard } from './lib/debug'
+import type { NodeResponse } from './api/types'
 
 interface StreamDisplayState {
   status: 'connecting' | 'open' | 'reconnecting' | 'closed'
@@ -54,66 +51,44 @@ export default function App() {
   const isDetailPanelOpen = useUiStore((state) => state.isDetailPanelOpen)
   const setSelectedNodeName = useUiStore((state) => state.setSelectedNodeName)
   const closeDetailPanel = useUiStore((state) => state.closeDetailPanel)
-  const portsByNode = useTopologyStore((state) => state.portsByNode)
-  const nodeStatusByNode = useTopologyStore((state) => state.nodeStatusByNode)
   const topologySnapshot = useTopologyStore((state) => state.topologySnapshot)
   const lastAppliedEventName = useTopologyStore(
     (state) => state.lastAppliedEventName,
   )
 
-  const nodesQuery = useNodes()
-  const runsQuery = useRuns()
   const topologyQuery = useTopology()
   const healthQuery = useHealth()
-  const triggerRunMutation = useTriggerRun()
-  const [nodeStream, setNodeStream] = useState<StreamDisplayState>(INITIAL_STREAM_STATE)
   const [topologyStream, setTopologyStream] = useState<StreamDisplayState>(INITIAL_STREAM_STATE)
-  const handleNodeStreamChange = useCallback((nextState: StreamDisplayState) => {
-    setNodeStream((currentState) =>
-      areStreamStatesEqual(currentState, nextState) ? currentState : nextState,
-    )
-  }, [])
   const handleTopologyStreamChange = useCallback((nextState: StreamDisplayState) => {
     setTopologyStream((currentState) =>
       areStreamStatesEqual(currentState, nextState) ? currentState : nextState,
     )
   }, [])
 
-  const nodes = useMemo(
-    () =>
-      (nodesQuery.data ?? []).map((node) => {
-        const status = nodeStatusByNode[node.name]
-        const ports = portsByNode[node.name]
-
-        return {
-          ...node,
-          online: status?.online ?? node.online,
-          degraded: status?.degraded ?? node.degraded,
-          last_seen_at: status?.last_seen_at ?? node.last_seen_at,
-          snapshot: node.snapshot
-            ? {
-                ...node.snapshot,
-                port_count: ports?.length ?? node.snapshot.port_count,
-              }
-            : ports
-              ? {
-                  collected_at: status?.last_seen_at ?? node.last_seen_at,
-                  port_count: ports.length,
-                  container_count: 0,
-                  service_count: 0,
-                  forward_count: 0,
-                }
-              : undefined,
-        }
-      }),
-    [nodeStatusByNode, nodesQuery.data, portsByNode],
-  )
-  const latestRun = useMemo(
-    () => runsQuery.data?.[0] ?? null,
-    [runsQuery.data],
-  )
   const health = healthQuery.data ?? null
   const topology = topologySnapshot ?? topologyQuery.data ?? null
+  const nodes = useMemo<NodeResponse[]>(
+    () =>
+      (topology?.nodes ?? []).map((node) => ({
+        name: node.name,
+        tailscale_ip: node.tailscale_ip,
+        online: node.online,
+        degraded: node.degraded ?? false,
+        collector_degraded: node.collector_degraded,
+        workload_degraded: node.workload_degraded,
+        last_seen_at: node.last_seen_at,
+        collector_error: node.collector_error,
+        workload_issues: node.workload_issues,
+        snapshot: {
+          collected_at: node.last_seen_at,
+          port_count: node.ports.length,
+          container_count: node.containers.length,
+          service_count: node.services.length,
+          forward_count: 0,
+        },
+      })),
+    [topology],
+  )
   const inventoryNodesByName = useMemo(
     () => Object.fromEntries(nodes.map((node) => [node.name, node])),
     [nodes],
@@ -165,12 +140,10 @@ export default function App() {
     [selectedNodeName, visibleTopologyLinks],
   )
   const isLiveUpdatesPaused =
-    nodeStream.status === 'reconnecting' ||
     topologyStream.status === 'reconnecting' ||
-    nodeStream.status === 'closed' ||
     topologyStream.status === 'closed'
   const liveUpdatesMessage =
-    nodeStream.status === 'closed' || topologyStream.status === 'closed'
+    topologyStream.status === 'closed'
       ? 'Live updates paused — stream connection closed.'
       : 'Live updates paused — reconnecting...'
 
@@ -191,8 +164,8 @@ export default function App() {
     [visibleTopologyLinks],
   )
   const trackedPortNodeCount = useMemo(
-    () => Object.keys(portsByNode).length,
-    [portsByNode],
+    () => nodes.filter((node) => (node.snapshot?.port_count ?? 0) > 0).length,
+    [nodes],
   )
   const isDetailPanelVisible =
     isDetailPanelOpen && selectedNodeName !== null
@@ -201,18 +174,12 @@ export default function App() {
     selectedNodeName,
     isDetailPanelOpen,
     isDetailPanelVisible,
-    nodeStreamStatus: nodeStream.status,
-    nodeStreamError: nodeStream.error,
-    nodeStreamEvent: nodeStream.lastEventName,
     topologyStreamStatus: topologyStream.status,
     topologyStreamError: topologyStream.error,
     topologyStreamEvent: topologyStream.lastEventName,
     nodesLength: nodes.length,
-    latestRunID: latestRun?.id ?? null,
-    latestRunFinishedAt: latestRun?.finished_at ?? null,
-    latestRunErrorCount: latestRun?.error_count ?? null,
     healthStatus: health?.status ?? null,
-    topologyRunId: topology?.run_id ?? null,
+    topologyVersion: topology?.version ?? null,
     topologyUpdatedAt: topology?.updated_at ?? null,
     topologyNodeCount,
     topologyEdgeCount,
@@ -220,8 +187,6 @@ export default function App() {
     staleNodeCount,
     onlineNodeCount,
     storeLastAppliedEventName: lastAppliedEventName,
-    portsByNodeRef: portsByNode,
-    nodeStatusByNodeRef: nodeStatusByNode,
     topologySnapshotRef: topologySnapshot,
   })
 
@@ -230,13 +195,11 @@ export default function App() {
       <ErrorBoundary
         fallback={
           <SseBoundaryFallback
-            onNodeStreamChange={handleNodeStreamChange}
             onTopologyStreamChange={handleTopologyStreamChange}
           />
         }
       >
         <SseBridge
-          onNodeStreamChange={handleNodeStreamChange}
           onTopologyStreamChange={handleTopologyStreamChange}
         />
       </ErrorBoundary>
@@ -245,13 +208,9 @@ export default function App() {
         health={health}
         isHealthLoading={healthQuery.isPending}
         nodes={nodes}
-        isNodesLoading={nodesQuery.isPending}
-        latestRun={latestRun}
-        isRunsLoading={runsQuery.isPending}
+        isNodesLoading={topologyQuery.isPending && !topology}
         selectedNodeName={selectedNode?.name ?? null}
         onSelectNode={setSelectedNodeName}
-        onTriggerRun={() => triggerRunMutation.mutate()}
-        isTriggeringRun={triggerRunMutation.isPending}
       />
 
       <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -259,10 +218,6 @@ export default function App() {
       
             <div className="flex items-center justify-between gap-3">
               <div className="flex tems-center gap-3">
-              <StreamStatus
-                label="Nodes"
-                status={nodeStream.status}
-              />
               <StreamStatus
                 label="Topology"
                 status={topologyStream.status}
@@ -296,9 +251,9 @@ export default function App() {
             ) : !topology || topology.nodes.length === 0 ? (
               <EmptyCanvas
                 title="No topology data yet."
-                description="Tailflow has not reported a graph yet. Trigger a collection run once the backend is connected to your tailnet."
-                onCollect={() => triggerRunMutation.mutate()}
-                isCollecting={triggerRunMutation.isPending}
+                description="Tailflow has not reported a graph yet. The backend is still bootstrapping or waiting for node activity."
+                onCollect={() => undefined}
+                isCollecting={false}
               />
             ) : (
               <div className="flex h-full flex-col">
@@ -319,8 +274,6 @@ export default function App() {
                       inventoryNodesByName={inventoryNodesByName}
                       selectedNodeName={selectedNodeName}
                       onSelectNode={setSelectedNodeName}
-                      onCollectNow={() => triggerRunMutation.mutate()}
-                      isCollecting={triggerRunMutation.isPending}
                     />
                   </ErrorBoundary>
                 </div>
@@ -345,29 +298,13 @@ export default function App() {
 }
 
 function SseBridge({
-  onNodeStreamChange,
   onTopologyStreamChange,
 }: {
-  onNodeStreamChange: (stream: StreamDisplayState) => void
   onTopologyStreamChange: (stream: StreamDisplayState) => void
 }) {
   useRenderLoopGuard('SseBridge')
 
-  const nodeStream = useNodeStream()
   const topologyStream = useTopologyStream()
-
-  useEffect(() => {
-    onNodeStreamChange({
-      status: nodeStream.status,
-      error: nodeStream.error,
-      lastEventName: nodeStream.lastEventName,
-    })
-  }, [
-    nodeStream.error,
-    nodeStream.lastEventName,
-    nodeStream.status,
-    onNodeStreamChange,
-  ])
 
   useEffect(() => {
     onTopologyStreamChange({
@@ -386,26 +323,19 @@ function SseBridge({
 }
 
 function SseBoundaryFallback({
-  onNodeStreamChange,
   onTopologyStreamChange,
 }: {
-  onNodeStreamChange: (stream: StreamDisplayState) => void
   onTopologyStreamChange: (stream: StreamDisplayState) => void
 }) {
   useRenderLoopGuard('SseBoundaryFallback')
 
   useEffect(() => {
-    onNodeStreamChange({
-      status: 'closed',
-      error: 'SSE node stream crashed.',
-      lastEventName: null,
-    })
     onTopologyStreamChange({
       status: 'closed',
       error: 'SSE topology stream crashed.',
       lastEventName: null,
     })
-  }, [onNodeStreamChange, onTopologyStreamChange])
+  }, [onTopologyStreamChange])
 
   return null
 }

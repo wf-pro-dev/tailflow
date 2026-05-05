@@ -16,9 +16,9 @@ import (
 	"github.com/wf-pro-dev/tailflow/internal/collector"
 	"github.com/wf-pro-dev/tailflow/internal/core"
 	"github.com/wf-pro-dev/tailflow/internal/parser"
-	"github.com/wf-pro-dev/tailflow/internal/resolver"
-	"github.com/wf-pro-dev/tailflow/internal/scheduler"
+	tailruntime "github.com/wf-pro-dev/tailflow/internal/runtime"
 	"github.com/wf-pro-dev/tailflow/internal/store"
+	"github.com/wf-pro-dev/tailflow/internal/topology"
 	"github.com/wf-pro-dev/tailkit"
 )
 
@@ -28,14 +28,13 @@ type config struct {
 	DBPath          string
 	StateDir        string
 	Ephemeral       bool
-	CollectInterval time.Duration
-	CollectJitter   time.Duration
 	NodeTimeout     time.Duration
 	DisableWatchers bool
 }
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	core.InitLogLevelFromEnv()
 
 	cfg, err := loadConfig()
 	if err != nil {
@@ -74,28 +73,23 @@ func run(ctx context.Context, cfg config) error {
 
 	bus := core.NewEventBus()
 	parsers := parser.NewRegistry()
-	collectorSvc := collector.NewCollector(ts, sqliteStore.Runs(), sqliteStore.Snapshots(), sqliteStore.ProxyConfigs(), bus, parsers)
+	collectorSvc := collector.NewCollector(ts, sqliteStore.ProxyConfigs(), bus, parsers)
 	collectorSvc.SetNodeTimeout(cfg.NodeTimeout)
-	resolverSvc := resolver.NewResolver(sqliteStore.Edges(), sqliteStore.Snapshots(), bus)
-	schedulerSvc := scheduler.NewScheduler(
-		scheduler.SchedulerConfig{
-			CollectInterval: cfg.CollectInterval,
-			CollectJitter:   cfg.CollectJitter,
-			NodeTimeout:     cfg.NodeTimeout,
+	topologySvc := topology.NewManager()
+	runtimeSvc := tailruntime.New(
+		tailruntime.Config{
 			DisableWatchers: cfg.DisableWatchers,
 		},
 		collectorSvc,
-		resolverSvc,
-		sqliteStore.Snapshots(),
+		topologySvc,
+		bus,
 	)
 
 	apiHandler := api.NewHandler(
-		sqliteStore.Runs(),
-		sqliteStore.Snapshots(),
-		sqliteStore.Edges(),
 		sqliteStore.ProxyConfigs(),
 		collectorSvc,
-		schedulerSvc,
+		topologySvc,
+		runtimeSvc,
 		bus,
 		parsers,
 	)
@@ -107,7 +101,7 @@ func run(ctx context.Context, cfg config) error {
 
 	errCh := make(chan error, 3)
 	go func() {
-		if err := schedulerSvc.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		if err := runtimeSvc.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			errCh <- err
 		}
 	}()
@@ -147,14 +141,6 @@ func loadConfig() (config, error) {
 
 	ephemeral := envBool("TAILFLOW_EPHEMERAL", false)
 	disableWatchers := envBool("TAILFLOW_DISABLE_WATCHERS", false)
-	collectInterval, err := envDuration("TAILFLOW_COLLECT_INTERVAL", 30*time.Second)
-	if err != nil {
-		return config{}, err
-	}
-	collectJitter, err := envDuration("TAILFLOW_COLLECT_JITTER", 5*time.Second)
-	if err != nil {
-		return config{}, err
-	}
 	nodeTimeout, err := envDuration("TAILFLOW_NODE_TIMEOUT", 10*time.Second)
 	if err != nil {
 		return config{}, err
@@ -166,8 +152,6 @@ func loadConfig() (config, error) {
 		DBPath:          dbPath,
 		StateDir:        stateDir,
 		Ephemeral:       ephemeral,
-		CollectInterval: collectInterval,
-		CollectJitter:   collectJitter,
 		NodeTimeout:     nodeTimeout,
 		DisableWatchers: disableWatchers,
 	}, nil

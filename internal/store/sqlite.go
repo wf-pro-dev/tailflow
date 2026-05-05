@@ -34,7 +34,6 @@ func OpenSQLite(path string) (*SQLiteStore, error) {
 
 func (s *SQLiteStore) migrate() error {
 	return s.db.AutoMigrate(
-		&CollectionRunModel{},
 		&NodeSnapshotModel{},
 		&ListenPortModel{},
 		&ContainerPortModel{},
@@ -46,11 +45,6 @@ func (s *SQLiteStore) migrate() error {
 // DB exposes the underlying GORM handle for wiring or transactions.
 func (s *SQLiteStore) DB() *gorm.DB {
 	return s.db
-}
-
-// Runs returns a run repository.
-func (s *SQLiteStore) Runs() RunStore {
-	return &sqliteRunStore{db: s.db}
 }
 
 // Snapshots returns a snapshot repository.
@@ -68,7 +62,6 @@ func (s *SQLiteStore) ProxyConfigs() ProxyConfigStore {
 	return &sqliteProxyConfigStore{db: s.db}
 }
 
-type sqliteRunStore struct{ db *gorm.DB }
 type sqliteSnapshotStore struct{ db *gorm.DB }
 type sqliteEdgeStore struct{ db *gorm.DB }
 type sqliteProxyConfigStore struct{ db *gorm.DB }

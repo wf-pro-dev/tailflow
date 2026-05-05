@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/wf-pro-dev/tailflow/internal/core"
 	"github.com/wf-pro-dev/tailflow/internal/parser"
@@ -25,6 +26,8 @@ import (
 const degradeThreshold = 3
 const defaultNodeTimeout = 10 * time.Second
 const localStoreTimeout = 2 * time.Second
+
+var errNodeClientUnavailable = errors.New("tailkit node client unavailable")
 
 // NodeStatus tracks liveness per node between collection cycles.
 type NodeStatus struct {
@@ -59,6 +62,30 @@ type PortReleasedEvent struct {
 	Port     store.ListenPort
 }
 
+// NodePortsReplacedEvent represents a full replacement of the current port inventory for one node.
+type NodePortsReplacedEvent struct {
+	NodeName core.NodeName      `json:"node_name"`
+	Ports    []store.ListenPort `json:"ports"`
+}
+
+// NodeContainersReplacedEvent represents a full replacement of the current container inventory for one node.
+type NodeContainersReplacedEvent struct {
+	NodeName   core.NodeName     `json:"node_name"`
+	Containers []store.Container `json:"containers"`
+}
+
+// NodeServicesReplacedEvent represents a full replacement of the current swarm service port inventory for one node.
+type NodeServicesReplacedEvent struct {
+	NodeName core.NodeName            `json:"node_name"`
+	Services []store.SwarmServicePort `json:"services"`
+}
+
+// NodeForwardsReplacedEvent represents a full replacement of the current proxy forward inventory for one node.
+type NodeForwardsReplacedEvent struct {
+	NodeName core.NodeName          `json:"node_name"`
+	Forwards []parser.ForwardAction `json:"forwards"`
+}
+
 type nodeClient interface {
 	Metrics() metricsClient
 	Docker() dockerClient
@@ -73,6 +100,7 @@ type metricsClient interface {
 type dockerClient interface {
 	Config(context.Context) (integrationsTypes.DockerConfig, error)
 	Containers(context.Context) ([]container.Summary, error)
+	StreamContainers(context.Context, func(tailkittypes.Event[tailkittypes.DockerEvent]) error) error
 	SwarmServices(context.Context) ([]swarm.Service, error)
 }
 
@@ -111,6 +139,10 @@ func (d tailkitDockerClient) Containers(ctx context.Context) ([]container.Summar
 	return d.docker.Containers(ctx)
 }
 
+func (d tailkitDockerClient) StreamContainers(ctx context.Context, fn func(tailkittypes.Event[tailkittypes.DockerEvent]) error) error {
+	return d.docker.StreamContainers(ctx, fn)
+}
+
 func (d tailkitDockerClient) SwarmServices(ctx context.Context) ([]swarm.Service, error) {
 	return d.docker.Swarm().Services(ctx)
 }
@@ -128,8 +160,6 @@ func (f tailkitFilesClient) List(ctx context.Context, path string) ([]tailkittyp
 // Collector builds and maintains node snapshots from tailkit data.
 type Collector struct {
 	srv          *tailkit.Server
-	runs         store.RunStore
-	snapshots    store.SnapshotStore
 	proxyConfigs store.ProxyConfigStore
 	bus          *core.EventBus
 	parsers      parser.Registry
@@ -140,6 +170,7 @@ type Collector struct {
 	mu       sync.Mutex
 	statuses map[core.NodeName]NodeStatus
 	failures map[core.NodeName]int
+	live     map[core.NodeName]store.NodeSnapshot
 
 	nodeTimeout time.Duration
 }
@@ -159,22 +190,19 @@ type collectNodeResult struct {
 
 func NewCollector(
 	srv *tailkit.Server,
-	runs store.RunStore,
-	snapshots store.SnapshotStore,
 	proxyConfigs store.ProxyConfigStore,
 	bus *core.EventBus,
 	parsers parser.Registry,
 ) *Collector {
 	c := &Collector{
 		srv:           srv,
-		runs:          runs,
-		snapshots:     snapshots,
 		proxyConfigs:  proxyConfigs,
 		bus:           bus,
 		parsers:       parsers,
 		discoverPeers: tailkit.OnlinePeers,
 		statuses:      make(map[core.NodeName]NodeStatus),
 		failures:      make(map[core.NodeName]int),
+		live:          make(map[core.NodeName]store.NodeSnapshot),
 		nodeTimeout:   defaultNodeTimeout,
 	}
 	c.newNode = func(hostname string) nodeClient {
@@ -201,165 +229,357 @@ func (c *Collector) SetNodeTimeout(timeout time.Duration) {
 	c.nodeTimeout = timeout
 }
 
-// RunOnce executes one collection cycle across all online peers.
-func (c *Collector) RunOnce(ctx context.Context) (store.CollectionRun, error) {
-	run := store.CollectionRun{
-		ID:        core.NewID(),
-		StartedAt: core.NowTimestamp(),
+func (c *Collector) LocalTailscaleIP(ctx context.Context) (string, error) {
+	if c.srv == nil || c.srv.Server == nil {
+		return "", nil
 	}
-	log.Printf("collector: run started id=%s", run.ID)
 
+	lc, err := c.srv.Server.LocalClient()
+	if err != nil {
+		return "", err
+	}
+	status, err := lc.StatusWithoutPeers(ctx)
+	if err != nil {
+		return "", err
+	}
+	if status == nil || len(status.TailscaleIPs) == 0 {
+		return "", nil
+	}
+	return status.TailscaleIPs[0].String(), nil
+}
+
+func (c *Collector) Bootstrap(ctx context.Context) error {
 	peers, err := c.discoverPeers(ctx, c.srv)
 	if err != nil {
-		log.Printf("collector: run failed id=%s stage=discover_peers err=%v", run.ID, err)
-		return run, fmt.Errorf("discover peers: %w", err)
+		return fmt.Errorf("discover peers: %w", err)
 	}
-	run.NodeCount = len(peers)
+	core.Infof("collector: bootstrap peers=%d", len(peers))
 
-	results := make(chan collectNodeResult, len(peers))
-	var wg sync.WaitGroup
-	for _, peer := range peers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			snapshot, err := c.collectNode(ctx, peer, run.ID)
-			results <- collectNodeResult{peer: peer, snapshot: snapshot, err: err}
-		}()
-	}
-
-	wg.Wait()
-	close(results)
-
-	collected := make([]collectNodeResult, 0, len(peers))
-	for res := range results {
-		collected = append(collected, res)
-	}
-	enrichResultsWithSwarmServicePublishes(collected)
-
+	results := c.collectPeers(ctx, peers, "")
 	seen := make(map[core.NodeName]struct{}, len(peers))
-	errs := make(map[core.NodeName]error)
-	for _, res := range collected {
+	successes := 0
+	failures := 0
+	for _, res := range results {
 		nodeName := core.NodeName(res.peer.Status.HostName)
 		seen[nodeName] = struct{}{}
-		saveCtx, cancelSave := c.localStoreContext(ctx)
-		saveErr := c.snapshots.Save(saveCtx, res.snapshot)
-		cancelSave()
-		if saveErr != nil {
-			errs[nodeName] = fmt.Errorf("save snapshot: %w", saveErr)
-			run.ErrorCount++
-			c.applyCollectionFailure(nodeName, errs[nodeName])
+		c.setSnapshot(res.snapshot)
+		if res.err != nil {
+			failures++
+			c.applyCollectionFailure(nodeName, res.err)
 			continue
 		}
+		successes++
+		c.applyCollectionSuccess(nodeName)
+	}
+	c.markOfflineNodes(seen)
+	core.Infof("collector: bootstrap complete successes=%d failures=%d live=%d", successes, failures, len(c.Snapshots()))
+	return nil
+}
 
-		if res.err != nil {
-			errs[nodeName] = res.err
-			run.ErrorCount++
-			c.applyCollectionFailure(nodeName, res.err)
-		} else {
-			c.applyCollectionSuccess(nodeName)
+func (c *Collector) RefreshPeers(ctx context.Context) ([]core.NodeName, error) {
+	peers, err := c.discoverPeers(ctx, c.srv)
+	if err != nil {
+		return nil, fmt.Errorf("discover peers: %w", err)
+	}
+	core.Infof("collector: refresh peers=%d", len(peers))
+
+	seen := make(map[core.NodeName]struct{}, len(peers))
+	successes := 0
+	failures := 0
+	for _, peer := range peers {
+		nodeName := core.NodeName(peer.Status.HostName)
+		seen[nodeName] = struct{}{}
+		snapshot, collectErr := c.collectNode(ctx, peer, "")
+		c.setSnapshot(snapshot)
+		if collectErr != nil {
+			failures++
+			c.applyCollectionFailure(nodeName, collectErr)
+			continue
 		}
-
-		core.BroadcastEvent(c.bus, "snapshot.updated", SnapshotEvent{
-			RunID:    run.ID,
-			Snapshot: res.snapshot,
+		successes++
+		c.applyCollectionSuccess(nodeName)
+		core.BroadcastEvent(c.bus, core.EventSnapshotUpdated.String(), SnapshotEvent{
+			RunID:    snapshot.RunID,
+			Snapshot: snapshot,
 		})
 	}
-
 	c.markOfflineNodes(seen)
 
-	run.FinishedAt = core.NowTimestamp()
-	if c.runs != nil {
-		saveCtx, cancelSave := c.localStoreContext(ctx)
-		err := c.runs.Save(saveCtx, run)
-		cancelSave()
-		if err != nil {
-			log.Printf("collector: run failed id=%s stage=save_run node_count=%d error_count=%d duration=%s err=%v", run.ID, run.NodeCount, run.ErrorCount, run.FinishedAt.Time().Sub(run.StartedAt.Time()), err)
-			return run, fmt.Errorf("save collection run: %w", err)
+	online := make([]core.NodeName, 0, len(peers))
+	for _, peer := range peers {
+		online = append(online, core.NodeName(peer.Status.HostName))
+	}
+	sort.Slice(online, func(i, j int) bool { return online[i] < online[j] })
+	core.Infof("collector: refresh complete online=%d successes=%d failures=%d", len(online), successes, failures)
+	return online, nil
+}
+
+func (c *Collector) Snapshots() []store.NodeSnapshot {
+	c.mu.Lock()
+	if len(c.live) > 0 {
+		snapshots := make([]store.NodeSnapshot, 0, len(c.live))
+		for _, snapshot := range c.live {
+			snapshots = append(snapshots, snapshot)
 		}
+		c.mu.Unlock()
+		sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].NodeName < snapshots[j].NodeName })
+		return snapshots
 	}
-	mergedErr := core.MergeErrors(errs)
-	if mergedErr != nil {
-		log.Printf("collector: run finished id=%s node_count=%d error_count=%d duration=%s err=%v", run.ID, run.NodeCount, run.ErrorCount, run.FinishedAt.Time().Sub(run.StartedAt.Time()), mergedErr)
-	} else {
-		log.Printf("collector: run finished id=%s node_count=%d error_count=%d duration=%s", run.ID, run.NodeCount, run.ErrorCount, run.FinishedAt.Time().Sub(run.StartedAt.Time()))
+	c.mu.Unlock()
+
+	return nil
+}
+
+func (c *Collector) LatestSnapshot(nodeName core.NodeName) (store.NodeSnapshot, bool) {
+	c.mu.Lock()
+	snapshot, ok := c.live[nodeName]
+	c.mu.Unlock()
+	if ok {
+		return snapshot, true
 	}
-	return run, mergedErr
+	return store.NodeSnapshot{}, false
+}
+
+func (c *Collector) MarkNodeDegraded(nodeName core.NodeName, err error) {
+	if err == nil {
+		err = errors.New("watcher failed")
+	}
+	c.applyCollectionFailure(nodeName, err)
 }
 
 // WatchNode patches the latest stored snapshot from the live port stream.
 func (c *Collector) WatchNode(ctx context.Context, nodeName core.NodeName) error {
 	node := c.newNode(string(nodeName))
 	if node == nil {
-		return fmt.Errorf("create node client for %s", nodeName)
+		return fmt.Errorf("%w: %s", errNodeClientUnavailable, nodeName)
 	}
+	core.Infof("collector: watch stream starting node=%s", nodeName)
 
-	return node.Metrics().StreamPorts(ctx, func(event tailkittypes.Event[tailkittypes.PortUpdate]) error {
-		snapshot, err := c.snapshots.LatestByNode(ctx, nodeName)
-		if err != nil {
-			return err
+	watchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var snapshotMu sync.Mutex
+	errCh := make(chan error, 2)
+
+	go func() {
+		errCh <- c.watchPortStream(watchCtx, nodeName, node, &snapshotMu)
+	}()
+
+	go func() {
+		errCh <- c.watchDockerStream(watchCtx, nodeName, node, &snapshotMu)
+	}()
+
+	var firstErr error
+	for i := 0; i < 2; i++ {
+		err := <-errCh
+		if firstErr == nil && err != nil && !errors.Is(err, context.Canceled) {
+			firstErr = err
+			cancel()
 		}
+	}
+	if firstErr != nil {
+		return firstErr
+	}
+	return ctx.Err()
+}
+
+func (c *Collector) watchPortStream(ctx context.Context, nodeName core.NodeName, node nodeClient, snapshotMu *sync.Mutex) error {
+	return node.Metrics().StreamPorts(ctx, func(event tailkittypes.Event[tailkittypes.PortUpdate]) error {
+		snapshotMu.Lock()
+		defer snapshotMu.Unlock()
+
+		snapshot := c.latestOrEmptySnapshot(nodeName)
 
 		switch event.Data.Kind {
 		case "snapshot":
 			snapshot.Ports = mapPorts(event.Data.Ports)
+			core.BroadcastEvent(c.bus, core.EventNodePortsReplaced.String(), NodePortsReplacedEvent{
+				NodeName: nodeName,
+				Ports:    snapshot.Ports,
+			})
 		case "bound":
 			port := mapPort(event.Data.Port)
 			snapshot.Ports = upsertPort(snapshot.Ports, port)
-			core.BroadcastEvent(c.bus, "port.bound", PortBoundEvent{NodeName: nodeName, Port: port})
+			core.BroadcastEvent(c.bus, core.EventNodePortUpserted.String(), PortBoundEvent{NodeName: nodeName, Port: port})
 		case "released":
 			port := mapPort(event.Data.Port)
 			snapshot.Ports = removePort(snapshot.Ports, port)
-			core.BroadcastEvent(c.bus, "port.released", PortReleasedEvent{NodeName: nodeName, Port: port})
+			core.BroadcastEvent(c.bus, core.EventNodePortRemoved.String(), PortReleasedEvent{NodeName: nodeName, Port: port})
 		}
 
-		snapshot.CollectedAt = core.NowTimestamp()
-		if err := c.snapshots.Save(ctx, snapshot); err != nil {
-			return err
+		forwards, proxyErrs := c.collectProxyForwards(ctx, nodeName, node.Files())
+		forwardsChanged := !reflect.DeepEqual(snapshot.Forwards, forwards)
+		snapshot.Forwards = forwards
+		if forwardsChanged {
+			core.BroadcastEvent(c.bus, core.EventNodeForwardsReplaced.String(), NodeForwardsReplacedEvent{
+				NodeName: nodeName,
+				Forwards: snapshot.Forwards,
+			})
 		}
-		core.BroadcastEvent(c.bus, "snapshot.updated", SnapshotEvent{
-			RunID:    snapshot.RunID,
-			Snapshot: snapshot,
-		})
+		snapshot.CollectedAt = core.NowTimestamp()
+		snapshot.Error = ""
+		if len(proxyErrs) > 0 {
+			snapshot.Error = joinErrors(proxyErrs).Error()
+		}
+
+		c.commitPatchedSnapshot(nodeName, snapshot)
+		core.Debugf("collector: watch port event node=%s kind=%s ports=%d", nodeName, event.Data.Kind, len(snapshot.Ports))
 		return nil
 	})
+}
+
+func (c *Collector) watchDockerStream(ctx context.Context, nodeName core.NodeName, node nodeClient, snapshotMu *sync.Mutex) error {
+	dockerEnabled, swarmReadEnabled, ok := c.watchDockerCapabilities(ctx, nodeName, node.Docker())
+	if !ok || !dockerEnabled {
+		return nil
+	}
+
+	return node.Docker().StreamContainers(ctx, func(event tailkittypes.Event[tailkittypes.DockerEvent]) error {
+		if !shouldRefreshDockerInventory(event.Data) {
+			return nil
+		}
+
+		snapshotMu.Lock()
+		defer snapshotMu.Unlock()
+
+		snapshot := c.latestOrEmptySnapshot(nodeName)
+		if err := c.refreshDockerInventory(ctx, nodeName, node.Docker(), swarmReadEnabled, &snapshot); err != nil {
+			core.Warnf("collector: watch docker refresh failed node=%s action=%s err=%v", nodeName, event.Data.Action, err)
+			c.applyCollectionFailure(nodeName, err)
+			return nil
+		}
+
+		c.commitPatchedSnapshot(nodeName, snapshot)
+		core.Debugf("collector: watch docker event node=%s action=%s containers=%d services=%d", nodeName, event.Data.Action, len(snapshot.Containers), len(snapshot.Services))
+		return nil
+	})
+}
+
+func (c *Collector) latestOrEmptySnapshot(nodeName core.NodeName) store.NodeSnapshot {
+	snapshot, ok := c.LatestSnapshot(nodeName)
+	if ok {
+		return snapshot
+	}
+	return store.NodeSnapshot{
+		ID:          core.NewID(),
+		NodeName:    nodeName,
+		CollectedAt: core.NowTimestamp(),
+	}
+}
+
+func (c *Collector) commitPatchedSnapshot(nodeName core.NodeName, snapshot store.NodeSnapshot) {
+	snapshot.CollectedAt = core.NowTimestamp()
+	c.setSnapshot(snapshot)
+	c.markNodeOnline(nodeName)
+}
+
+func (c *Collector) watchDockerCapabilities(ctx context.Context, nodeName core.NodeName, docker dockerClient) (bool, bool, bool) {
+	dockerConfigCtx, cancelDockerConfig := c.remoteCallContext(ctx)
+	defer cancelDockerConfig()
+
+	dockerConfig, err := docker.Config(dockerConfigCtx)
+	if err != nil {
+		core.Debugf("collector: watch docker config skipped node=%s err=%v", nodeName, err)
+		return false, false, false
+	}
+	return dockerConfig.Enabled, dockerConfig.Swarm.Permits("read"), true
+}
+
+func (c *Collector) refreshDockerInventory(ctx context.Context, nodeName core.NodeName, docker dockerClient, swarmReadEnabled bool, snapshot *store.NodeSnapshot) error {
+	if snapshot == nil {
+		return errors.New("docker refresh snapshot is nil")
+	}
+
+	services := snapshot.Services
+	if swarmReadEnabled {
+		swarmCtx, cancelSwarm := c.remoteCallContext(ctx)
+		currentServices, err := docker.SwarmServices(swarmCtx)
+		cancelSwarm()
+		if err != nil && !errors.Is(err, tailkittypes.ErrDockerUnavailable) {
+			core.Debugf("collector: watch docker swarm services skipped node=%s err=%v", nodeName, err)
+		} else if err == nil {
+			services = mapSwarmServices(currentServices)
+		}
+	}
+
+	containersCtx, cancelContainers := c.remoteCallContext(ctx)
+	currentContainers, err := docker.Containers(containersCtx)
+	cancelContainers()
+	if err != nil && !errors.Is(err, tailkittypes.ErrDockerUnavailable) {
+		return fmt.Errorf("docker containers: %w", err)
+	}
+
+	servicesChanged := !reflect.DeepEqual(snapshot.Services, services)
+	snapshot.Services = services
+	if servicesChanged {
+		core.BroadcastEvent(c.bus, core.EventNodeServicesReplaced.String(), NodeServicesReplacedEvent{
+			NodeName: nodeName,
+			Services: snapshot.Services,
+		})
+	}
+	if err == nil {
+		containers := mapContainers(currentContainers, services)
+		containersChanged := !reflect.DeepEqual(snapshot.Containers, containers)
+		snapshot.Containers = containers
+		if containersChanged {
+			core.BroadcastEvent(c.bus, core.EventNodeContainersReplaced.String(), NodeContainersReplacedEvent{
+				NodeName:   nodeName,
+				Containers: snapshot.Containers,
+			})
+		}
+	}
+	snapshot.Error = ""
+	return nil
+}
+
+func shouldRefreshDockerInventory(event tailkittypes.DockerEvent) bool {
+	action := string(event.Action)
+	switch {
+	case action == string(events.ActionAttach),
+		action == string(events.ActionDetach),
+		action == "exec_create",
+		action == "exec_start",
+		action == "exec_die",
+		action == "top",
+		action == "resize",
+		action == "archive-path",
+		action == "extract-to-dir":
+		return false
+	}
+
+	if action == "" {
+		return true
+	}
+
+	switch {
+	case action == string(events.ActionCreate),
+		action == string(events.ActionStart),
+		action == string(events.ActionRestart),
+		action == string(events.ActionStop),
+		action == string(events.ActionKill),
+		action == string(events.ActionDie),
+		action == string(events.ActionOOM),
+		action == string(events.ActionPause),
+		action == string(events.ActionUnPause),
+		action == string(events.ActionUpdate),
+		action == string(events.ActionRename),
+		action == string(events.ActionDestroy),
+		action == string(events.ActionRemove):
+		return true
+	case strings.HasPrefix(action, string(events.ActionHealthStatus)):
+		return true
+	default:
+		return event.Type == "" || event.Type == events.ContainerEventType
+	}
 }
 
 // GetStatus returns current collector node status state.
 func (c *Collector) GetStatus(ctx context.Context) ([]NodeStatus, error) {
 	c.mu.Lock()
-	statusMap := make(map[core.NodeName]NodeStatus, len(c.statuses))
-	for nodeName, status := range c.statuses {
-		statusMap[nodeName] = status
-	}
-	c.mu.Unlock()
+	defer c.mu.Unlock()
 
-	if c.srv != nil && c.discoverPeers != nil {
-		if peers, err := c.discoverPeers(ctx, c.srv); err == nil {
-			now := core.NowTimestamp()
-			seen := make(map[core.NodeName]struct{}, len(peers))
-			for _, peer := range peers {
-				nodeName := core.NodeName(peer.Status.HostName)
-				seen[nodeName] = struct{}{}
-				status := statusMap[nodeName]
-				status.NodeName = nodeName
-				status.Online = true
-				if status.LastSeenAt.IsZero() {
-					status.LastSeenAt = now
-				}
-				statusMap[nodeName] = status
-			}
-			for nodeName, status := range statusMap {
-				if _, ok := seen[nodeName]; ok {
-					continue
-				}
-				status.Online = false
-				statusMap[nodeName] = status
-			}
-		}
-	}
-
-	statuses := make([]NodeStatus, 0, len(statusMap))
-	for _, status := range statusMap {
+	statuses := make([]NodeStatus, 0, len(c.statuses))
+	for _, status := range c.statuses {
 		statuses = append(statuses, status)
 	}
 	sort.Slice(statuses, func(i, j int) bool { return statuses[i].NodeName < statuses[j].NodeName })
@@ -382,6 +602,7 @@ func (c *Collector) PreviewProxyConfig(ctx context.Context, nodeName core.NodeNa
 
 func (c *Collector) collectNode(ctx context.Context, peer tailkittypes.Peer, runID core.ID) (store.NodeSnapshot, error) {
 	nodeName := core.NodeName(peer.Status.HostName)
+	core.Debugf("collector: collect start node=%s run_id=%s", nodeName, runID)
 	snapshot := store.NodeSnapshot{
 		ID:          core.NewID(),
 		RunID:       runID,
@@ -393,7 +614,7 @@ func (c *Collector) collectNode(ctx context.Context, peer tailkittypes.Peer, run
 
 	node := c.newNode(string(nodeName))
 	if node == nil {
-		err := fmt.Errorf("tailkit node client unavailable")
+		err := fmt.Errorf("%w: %s", errNodeClientUnavailable, nodeName)
 		snapshot.Error = err.Error()
 		return snapshot, err
 	}
@@ -427,7 +648,7 @@ func (c *Collector) collectNode(ctx context.Context, peer tailkittypes.Peer, run
 		services, err := node.Docker().SwarmServices(swarmCtx)
 		cancelSwarm()
 		if err != nil && !errors.Is(err, tailkittypes.ErrDockerUnavailable) {
-			log.Printf("collector: swarm services skipped node=%s err=%v", nodeName, err)
+			core.Debugf("collector: swarm services skipped node=%s err=%v", nodeName, err)
 		} else if err == nil {
 			snapshot.Services = mapSwarmServices(services)
 		}
@@ -445,34 +666,78 @@ func (c *Collector) collectNode(ctx context.Context, peer tailkittypes.Peer, run
 	}
 
 	if c.proxyConfigs != nil {
-		storeCtx, cancelStore := c.localStoreContext(ctx)
-		configs, err := c.proxyConfigs.ListByNode(storeCtx, nodeName)
-		cancelStore()
-		if err != nil {
-			partialErrs = append(partialErrs, fmt.Errorf("proxy config store: %w", err))
-		} else {
-			allForwards := make([]parser.ForwardAction, 0)
-			for _, config := range configs {
-				configCtx, cancelConfig := c.remoteCallContext(ctx)
-				result := c.readAndParseProxyConfig(configCtx, node.Files(), config.Kind, config.ConfigPath)
-				cancelConfig()
-				allForwards = append(allForwards, result.parsed.Forwards...)
-				for _, warning := range result.parsed.Errors {
-					partialErrs = append(partialErrs, errors.New("proxy config warning: "+warning))
-				}
-				if result.err != nil {
-					partialErrs = append(partialErrs, result.err)
-				}
-			}
-			snapshot.Forwards = parser.DedupeForwards(allForwards)
-		}
+		snapshot.Forwards, partialErrs = c.collectProxyForwards(ctx, nodeName, node.Files(), partialErrs...)
 	}
 
 	merged := joinErrors(partialErrs)
 	if merged != nil {
 		snapshot.Error = merged.Error()
+		core.Warnf("collector: collect partial_failure node=%s ports=%d containers=%d services=%d forwards=%d err=%v", nodeName, len(snapshot.Ports), len(snapshot.Containers), len(snapshot.Services), len(snapshot.Forwards), merged)
+		return snapshot, merged
 	}
-	return snapshot, merged
+	core.Debugf("collector: collect success node=%s ports=%d containers=%d services=%d forwards=%d", nodeName, len(snapshot.Ports), len(snapshot.Containers), len(snapshot.Services), len(snapshot.Forwards))
+	return snapshot, nil
+}
+
+func (c *Collector) collectProxyForwards(ctx context.Context, nodeName core.NodeName, files filesClient, errs ...error) ([]parser.ForwardAction, []error) {
+	if c.proxyConfigs == nil {
+		return nil, errs
+	}
+
+	storeCtx, cancelStore := c.localStoreContext(ctx)
+	configs, err := c.proxyConfigs.ListByNode(storeCtx, nodeName)
+	cancelStore()
+	if err != nil {
+		return nil, append(errs, fmt.Errorf("proxy config store: %w", err))
+	}
+
+	allForwards := make([]parser.ForwardAction, 0)
+	for _, config := range configs {
+		configCtx, cancelConfig := c.remoteCallContext(ctx)
+		result := c.readAndParseProxyConfig(configCtx, files, config.Kind, config.ConfigPath)
+		cancelConfig()
+		allForwards = append(allForwards, result.parsed.Forwards...)
+		for _, warning := range result.parsed.Errors {
+			errs = append(errs, errors.New("proxy config warning: "+warning))
+		}
+		if result.err != nil {
+			errs = append(errs, result.err)
+		}
+	}
+	return parser.DedupeForwards(allForwards), errs
+}
+
+func (c *Collector) collectPeers(ctx context.Context, peers []tailkittypes.Peer, runID core.ID) []collectNodeResult {
+	results := make(chan collectNodeResult, len(peers))
+	var wg sync.WaitGroup
+	for _, peer := range peers {
+		peer := peer
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			snapshot, err := c.collectNode(ctx, peer, runID)
+			results <- collectNodeResult{peer: peer, snapshot: snapshot, err: err}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	collected := make([]collectNodeResult, 0, len(peers))
+	for result := range results {
+		collected = append(collected, result)
+	}
+	enrichResultsWithSwarmServicePublishes(collected)
+	return collected
+}
+
+func (c *Collector) setSnapshot(snapshot store.NodeSnapshot) {
+	c.mu.Lock()
+	if snapshot.ID == "" {
+		snapshot.ID = core.NewID()
+	}
+	c.live[snapshot.NodeName] = snapshot
+	c.mu.Unlock()
+	core.Debugf("collector: snapshot stored node=%s ports=%d containers=%d services=%d forwards=%d error=%t", snapshot.NodeName, len(snapshot.Ports), len(snapshot.Containers), len(snapshot.Services), len(snapshot.Forwards), snapshot.Error != "")
 }
 
 func (c *Collector) localStoreContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -639,16 +904,40 @@ func (c *Collector) applyCollectionSuccess(nodeName core.NodeName) {
 	c.publishStatusEvent(previous, current)
 }
 
+func (c *Collector) markNodeOnline(nodeName core.NodeName) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	previous := c.statuses[nodeName]
+	current := previous
+	current.NodeName = nodeName
+	current.Online = true
+	current.Degraded = false
+	current.LastError = ""
+	if current.LastSeenAt.IsZero() {
+		current.LastSeenAt = core.NowTimestamp()
+	} else {
+		current.LastSeenAt = core.NowTimestamp()
+	}
+	c.statuses[nodeName] = current
+	c.publishStatusEvent(previous, current)
+}
+
 func (c *Collector) applyCollectionFailure(nodeName core.NodeName, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	previous := c.statuses[nodeName]
 	c.failures[nodeName]++
+	degraded := c.failures[nodeName] >= degradeThreshold
+	if errors.Is(err, errNodeClientUnavailable) {
+		degraded = true
+		c.failures[nodeName] = degradeThreshold
+	}
 	current := NodeStatus{
 		NodeName:   nodeName,
 		Online:     true,
-		Degraded:   c.failures[nodeName] >= degradeThreshold,
+		Degraded:   degraded,
 		LastSeenAt: core.NowTimestamp(),
 		LastError:  err.Error(),
 	}
@@ -675,26 +964,21 @@ func (c *Collector) markOfflineNodes(seen map[core.NodeName]struct{}) {
 }
 
 func (c *Collector) publishStatusEvent(previous, current NodeStatus) {
-	if current == previous {
+	if statusTopologyEquivalent(previous, current) {
 		return
 	}
 
-	var eventName string
-	switch {
-	case current.Online && !previous.Online:
-		eventName = "node.connected"
-	case !current.Online && previous.Online:
-		eventName = "node.disconnected"
-	case current.Degraded && !previous.Degraded:
-		eventName = "node.degraded"
-	default:
-		return
-	}
-
-	core.BroadcastEvent(c.bus, eventName, NodeStatusEvent{
+	core.BroadcastEvent(c.bus, core.EventNodeStatusChanged.String(), NodeStatusEvent{
 		Previous: previous,
 		Current:  current,
 	})
+}
+
+func statusTopologyEquivalent(previous, current NodeStatus) bool {
+	return previous.NodeName == current.NodeName &&
+		previous.Online == current.Online &&
+		previous.Degraded == current.Degraded &&
+		previous.LastError == current.LastError
 }
 
 func firstTailscaleIP(peer tailkittypes.Peer) string {

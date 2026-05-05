@@ -1,7 +1,6 @@
 package resolver
 
 import (
-	"context"
 	"net"
 	"sort"
 	"strconv"
@@ -43,94 +42,11 @@ type IndexedNodeState struct {
 	HasServiceInventory bool
 }
 
-// EdgeEvent is emitted after topology resolution changes.
-type EdgeEvent struct {
-	RunID core.ID              `json:"run_id"`
-	Edges []store.TopologyEdge `json:"edges"`
-	Diff  EdgeDiff             `json:"diff"`
-}
-
 // EdgeDiff describes changes between edge sets.
 type EdgeDiff struct {
 	Added   []store.TopologyEdge `json:"added"`
 	Removed []store.TopologyEdge `json:"removed"`
 	Changed []store.TopologyEdge `json:"changed"`
-}
-
-// Resolver produces topology edges from stored snapshots.
-type Resolver struct {
-	edges     store.EdgeStore
-	snapshots store.SnapshotStore
-	bus       *core.EventBus
-}
-
-func NewResolver(edges store.EdgeStore, snapshots store.SnapshotStore, bus *core.EventBus) *Resolver {
-	return &Resolver{edges: edges, snapshots: snapshots, bus: bus}
-}
-
-// ResolveRun builds and persists the full edge set for a completed run.
-func (r *Resolver) ResolveRun(ctx context.Context, run store.CollectionRun, snapshots []store.NodeSnapshot) ([]store.TopologyEdge, error) {
-	index := BuildIndex(snapshots)
-	current := resolveSnapshots(run.ID, snapshots, index)
-
-	var previous []store.TopologyEdge
-	if r.edges != nil {
-		var err error
-		previous, err = r.edges.LatestEdges(ctx)
-		if err != nil {
-			return nil, err
-		}
-		for _, edge := range current {
-			if err := r.edges.Save(ctx, edge); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	diff := DiffEdges(previous, current)
-	r.publishDiff(run.ID, current, diff)
-	core.BroadcastEvent(r.bus, "topology.run_completed", run)
-	return current, nil
-}
-
-// ResolveSnapshot recomputes only the edges involving one node and replaces them in the latest run.
-func (r *Resolver) ResolveSnapshot(ctx context.Context, snapshot store.NodeSnapshot) ([]store.TopologyEdge, error) {
-	if r.snapshots == nil || r.edges == nil {
-		index := BuildIndex([]store.NodeSnapshot{snapshot})
-		return filterEdgesForNode(resolveSnapshots(snapshot.RunID, []store.NodeSnapshot{snapshot}, index), snapshot.NodeName), nil
-	}
-
-	currentSnapshots, err := latestSnapshotsByRun(ctx, r.snapshots, snapshot.RunID)
-	if err != nil {
-		return nil, err
-	}
-	currentSnapshots[snapshot.NodeName] = snapshot
-
-	all := make([]store.NodeSnapshot, 0, len(currentSnapshots))
-	for _, snap := range currentSnapshots {
-		all = append(all, snap)
-	}
-	index := BuildIndex(all)
-	recomputed := filterEdgesForNode(resolveSnapshots(snapshot.RunID, all, index), snapshot.NodeName)
-
-	previous, err := r.edges.List(ctx, core.Filter{NodeName: snapshot.NodeName})
-	if err != nil {
-		return nil, err
-	}
-	for _, edge := range previous {
-		if err := r.edges.Delete(ctx, edge.ID); err != nil {
-			return nil, err
-		}
-	}
-	for _, edge := range recomputed {
-		if err := r.edges.Save(ctx, edge); err != nil {
-			return nil, err
-		}
-	}
-
-	diff := DiffEdges(previous, recomputed)
-	r.publishDiff(snapshot.RunID, recomputed, diff)
-	return recomputed, nil
 }
 
 // BuildIndex constructs lookup indexes from snapshots.
@@ -209,6 +125,12 @@ func BuildIndex(snapshots []store.NodeSnapshot) NodeIndex {
 	}
 
 	return index
+}
+
+// ResolveEdges resolves the current edge set for an arbitrary snapshot group.
+func ResolveEdges(runID core.ID, snapshots []store.NodeSnapshot) []store.TopologyEdge {
+	index := BuildIndex(snapshots)
+	return resolveSnapshots(runID, snapshots, index)
 }
 
 // ResolveTarget resolves a normalized parser target against the snapshot index.
@@ -626,31 +548,6 @@ func nodeHasServiceInventory(nodeName core.NodeName, index NodeIndex) bool {
 	return ok && state.HasServiceInventory
 }
 
-func latestSnapshotsByRun(ctx context.Context, snapshots store.SnapshotStore, runID core.ID) (map[core.NodeName]store.NodeSnapshot, error) {
-	list, err := snapshots.ListByRun(ctx, runID)
-	if err != nil {
-		return nil, err
-	}
-	latest := make(map[core.NodeName]store.NodeSnapshot)
-	for _, snapshot := range list {
-		if _, ok := latest[snapshot.NodeName]; !ok {
-			latest[snapshot.NodeName] = snapshot
-		}
-	}
-	return latest, nil
-}
-
-func filterEdgesForNode(edges []store.TopologyEdge, nodeName core.NodeName) []store.TopologyEdge {
-	filtered := make([]store.TopologyEdge, 0)
-	for _, edge := range edges {
-		if edge.FromNode == nodeName || edge.ToNode == nodeName {
-			filtered = append(filtered, edge)
-		}
-	}
-	sortEdges(filtered)
-	return filtered
-}
-
 func edgeKey(edge store.TopologyEdge) string {
 	return strings.Join([]string{
 		string(edge.FromNode),
@@ -733,19 +630,4 @@ func dedupeProxyEdges(edges []store.TopologyEdge) []store.TopologyEdge {
 		out = append(out, edge)
 	}
 	return out
-}
-
-func (r *Resolver) publishDiff(runID core.ID, edges []store.TopologyEdge, diff EdgeDiff) {
-	if len(diff.Added) > 0 {
-		core.BroadcastEvent(r.bus, "topology.edge_added", EdgeEvent{RunID: runID, Edges: diff.Added, Diff: diff})
-	}
-	if len(diff.Removed) > 0 {
-		core.BroadcastEvent(r.bus, "topology.edge_removed", EdgeEvent{RunID: runID, Edges: diff.Removed, Diff: diff})
-	}
-	if len(diff.Changed) > 0 {
-		core.BroadcastEvent(r.bus, "topology.edge_changed", EdgeEvent{RunID: runID, Edges: diff.Changed, Diff: diff})
-	}
-	if len(edges) == 0 && len(diff.Added) == 0 && len(diff.Removed) == 0 && len(diff.Changed) == 0 {
-		core.BroadcastEvent(r.bus, "topology.edge_changed", EdgeEvent{RunID: runID, Edges: nil, Diff: diff})
-	}
 }

@@ -2,14 +2,6 @@ package store
 
 import "time"
 
-type CollectionRunModel struct {
-	ID         string    `gorm:"primaryKey"`
-	StartedAt  time.Time `gorm:"index"`
-	FinishedAt time.Time
-	NodeCount  int
-	ErrorCount int
-}
-
 type NodeSnapshotModel struct {
 	ID          string `gorm:"primaryKey"`
 	RunID       string `gorm:"index;not null"`

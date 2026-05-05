@@ -1,6 +1,7 @@
 import { useEffect, useState, useEffectEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import type { CollectionRun, TopologyResponse } from '../api/types'
+import type { TopologyPatch, TopologyReset, TopologyResponse } from '../api/types'
+import { fetchTopology } from '../api/topology'
 import {
   createEventStream,
   type EventStreamStatus,
@@ -8,13 +9,13 @@ import {
 } from './client'
 import { healthQueryKey } from '../hooks/useHealth'
 import { nodesQueryKey } from '../hooks/useNodes'
-import { runsQueryKey } from '../hooks/useRuns'
 import { topologyQueryKey } from '../hooks/useTopology'
 import { useTopologyStore } from '../store/topology'
 
 const TOPOLOGY_STREAM_EVENT_NAMES = [
   'topology.snapshot',
-  'topology.run_completed',
+  'topology.patch',
+  'topology.reset',
 ] as const
 
 interface TopologyStreamState {
@@ -37,6 +38,7 @@ export function useTopologyStream(): TopologyStreamState {
     lastEventName: null,
   })
   const applySnapshot = useTopologyStore((state) => state.applySnapshot)
+  const applyTopologyPatch = useTopologyStore((state) => state.applyTopologyPatch)
 
   const handleTopologySnapshot = useEffectEvent(
     (event: StreamEvent<TopologyResponse>) => {
@@ -52,11 +54,42 @@ export function useTopologyStream(): TopologyStreamState {
     },
   )
 
-  const handleRunCompleted = useEffectEvent((event: StreamEvent<CollectionRun>) => {
+  const handleTopologyPatch = useEffectEvent((event: StreamEvent<TopologyPatch>) => {
     logTopologyEvent(event)
+    const currentVersion = useTopologyStore.getState().topologyVersion
+    if (currentVersion > 0 && event.data.version !== currentVersion + 1) {
+      void queryClient
+        .fetchQuery({
+          queryKey: topologyQueryKey,
+          queryFn: fetchTopology,
+        })
+        .then((snapshot) => {
+          applySnapshot(snapshot)
+          queryClient.setQueryData(topologyQueryKey, snapshot)
+        })
+      setStreamState((current) => ({
+        ...current,
+        error: null,
+        lastEventId: event.lastEventId,
+        lastEventName: 'topology.patch.out_of_order',
+      }))
+      return
+    }
+    applyTopologyPatch(event.data)
+    queryClient.invalidateQueries({ queryKey: healthQueryKey })
+    setStreamState((current) => ({
+      ...current,
+      error: null,
+      lastEventId: event.lastEventId,
+      lastEventName: event.name,
+    }))
+  })
+
+  const handleTopologyReset = useEffectEvent((event: StreamEvent<TopologyReset>) => {
+    logTopologyEvent(event)
+    applySnapshot(event.data.snapshot)
+    queryClient.setQueryData(topologyQueryKey, event.data.snapshot)
     void Promise.all([
-      queryClient.invalidateQueries({ queryKey: topologyQueryKey }),
-      queryClient.invalidateQueries({ queryKey: runsQueryKey }),
       queryClient.invalidateQueries({ queryKey: nodesQueryKey }),
       queryClient.invalidateQueries({ queryKey: healthQueryKey }),
     ])
@@ -94,8 +127,11 @@ export function useTopologyStream(): TopologyStreamState {
           case 'topology.snapshot':
             handleTopologySnapshot(event as StreamEvent<TopologyResponse>)
             break
-          case 'topology.run_completed':
-            handleRunCompleted(event as StreamEvent<CollectionRun>)
+          case 'topology.patch':
+            handleTopologyPatch(event as StreamEvent<TopologyPatch>)
+            break
+          case 'topology.reset':
+            handleTopologyReset(event as StreamEvent<TopologyReset>)
             break
           default:
             console.debug('[tailflow:sse:topology] unhandled event', event)

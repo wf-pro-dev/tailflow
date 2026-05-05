@@ -19,7 +19,7 @@ The backend is split across these internal packages:
 - `internal/parser` for proxy parser strategies and registry-based dispatch
 - `internal/resolver` for building topology edges from collected snapshots
 - `internal/store` for GORM-backed SQLite persistence
-- `internal/scheduler` and `internal/api` for orchestration, HTTP endpoints, and SSE
+- `internal/runtime` and `internal/api` for topology orchestration, HTTP endpoints, and SSE
 
 Primary entrypoints and app layout:
 
@@ -30,7 +30,7 @@ internal/collector
 internal/parser
 internal/resolver
 internal/store
-internal/scheduler
+internal/runtime
 internal/api
 internal/sse
 tailflow-ui

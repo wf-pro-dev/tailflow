@@ -4,7 +4,7 @@ services:
   backend:
     image: wwwill-1.lab:5000/tailflow/backend:${BACKEND_TAG:-dev}
     networks:
-      - tailflow-net
+      - network
     container_name: tailflow-backend
     restart: unless-stopped
     environment:
@@ -16,15 +16,16 @@ services:
       TAILFLOW_COLLECT_INTERVAL: ${TAILFLOW_COLLECT_INTERVAL:-30s}
       TAILFLOW_COLLECT_JITTER: ${TAILFLOW_COLLECT_JITTER:-5s}
       TAILFLOW_NODE_TIMEOUT: ${TAILFLOW_NODE_TIMEOUT:-10s}
+      TAILFLOW_LOG_LEVEL: ${TAILFLOW_LOG_LEVEL:-info}
       TS_AUTHKEY: ${TS_AUTHKEY:-}
       TSNET_FORCE_LOGIN: ${TSNET_FORCE_LOGIN:-}
     volumes:
-      - tailflow-data:/var/lib/tailflow
+      - data:/var/lib/tailflow
 
   ui:
     image: wwwill-1.lab:5000/tailflow/ui:${UI_TAG:-dev}
     networks:
-      - tailflow-net
+      - network
     container_name: tailflow-ui
     restart: unless-stopped
     ports:
@@ -34,8 +35,8 @@ services:
         protocol: tcp
 
 volumes:
-  tailflow-data:
+  data:
 
 networks:
-  tailflow-net:
+  network:
     driver: bridge

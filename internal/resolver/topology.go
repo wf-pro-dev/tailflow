@@ -71,6 +71,66 @@ func BuildTopologyData(snapshots []store.NodeSnapshot) TopologyData {
 	return builder.data()
 }
 
+// BuildInventoryProjection rebuilds only the inventory-derived topology domains.
+func BuildInventoryProjection(snapshots []store.NodeSnapshot) TopologyData {
+	index := BuildIndex(snapshots)
+	builder := newTopologyBuilder(index)
+
+	orderedSnapshots := append([]store.NodeSnapshot(nil), snapshots...)
+	sort.Slice(orderedSnapshots, func(i, j int) bool {
+		if orderedSnapshots[i].NodeName != orderedSnapshots[j].NodeName {
+			return orderedSnapshots[i].NodeName < orderedSnapshots[j].NodeName
+		}
+		return orderedSnapshots[i].ID < orderedSnapshots[j].ID
+	})
+
+	for _, snapshot := range orderedSnapshots {
+		builder.addInventory(snapshot)
+	}
+
+	return builder.data()
+}
+
+// BuildRouteProjectionForNode rebuilds only the route-family projection for one node
+// while still using the full inventory index for resolution.
+func BuildRouteProjectionForNode(snapshots []store.NodeSnapshot, nodeName core.NodeName) TopologyData {
+	return BuildRouteProjectionForNodes(snapshots, []core.NodeName{nodeName})
+}
+
+// BuildRouteProjectionForNodes rebuilds only the route-family projection for the given source nodes
+// while still using the full inventory index for resolution.
+func BuildRouteProjectionForNodes(snapshots []store.NodeSnapshot, nodeNames []core.NodeName) TopologyData {
+	index := BuildIndex(snapshots)
+	builder := newTopologyBuilder(index)
+	nodeSet := make(map[core.NodeName]struct{}, len(nodeNames))
+	for _, nodeName := range nodeNames {
+		if nodeName == "" {
+			continue
+		}
+		nodeSet[nodeName] = struct{}{}
+	}
+
+	orderedSnapshots := append([]store.NodeSnapshot(nil), snapshots...)
+	sort.Slice(orderedSnapshots, func(i, j int) bool {
+		if orderedSnapshots[i].NodeName != orderedSnapshots[j].NodeName {
+			return orderedSnapshots[i].NodeName < orderedSnapshots[j].NodeName
+		}
+		return orderedSnapshots[i].ID < orderedSnapshots[j].ID
+	})
+
+	for _, snapshot := range orderedSnapshots {
+		builder.addInventory(snapshot)
+	}
+	for _, snapshot := range orderedSnapshots {
+		if _, ok := nodeSet[snapshot.NodeName]; !ok {
+			continue
+		}
+		builder.addRoutes(snapshot)
+	}
+
+	return builder.data()
+}
+
 func newTopologyBuilder(index NodeIndex) *topologyBuilder {
 	return &topologyBuilder{
 		index:                 index,

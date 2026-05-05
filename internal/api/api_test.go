@@ -15,30 +15,31 @@ import (
 	"github.com/wf-pro-dev/tailflow/internal/collector"
 	"github.com/wf-pro-dev/tailflow/internal/core"
 	"github.com/wf-pro-dev/tailflow/internal/parser"
-	"github.com/wf-pro-dev/tailflow/internal/resolver"
 	"github.com/wf-pro-dev/tailflow/internal/store"
+	"github.com/wf-pro-dev/tailflow/internal/topology"
 )
 
 func TestListNodes(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	if err := deps.snapshots.Save(context.Background(), store.NodeSnapshot{
+	snapshot := store.NodeSnapshot{
 		ID:          "snap-1",
 		RunID:       "run-1",
 		NodeName:    "node-a",
 		TailscaleIP: "100.64.0.1",
 		CollectedAt: core.NowTimestamp(),
 		Ports:       []store.ListenPort{{Port: 80}},
-	}); err != nil {
-		t.Fatalf("save snapshot: %v", err)
 	}
 
-	handler := newHandlerForTest(deps, fakeCollectorReader{statuses: []collector.NodeStatus{{
-		NodeName:   "node-a",
-		Online:     true,
-		LastSeenAt: core.NowTimestamp(),
-	}}})
+	handler := newHandlerForTest(deps, fakeCollectorReader{
+		statuses: []collector.NodeStatus{{
+			NodeName:   "node-a",
+			Online:     true,
+			LastSeenAt: core.NowTimestamp(),
+		}},
+		snapshots: []store.NodeSnapshot{snapshot},
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil)
 	rec := httptest.NewRecorder()
@@ -56,7 +57,7 @@ func TestListNodesIncludesSeparateCollectorAndWorkloadDegradation(t *testing.T) 
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	if err := deps.snapshots.Save(context.Background(), store.NodeSnapshot{
+	snapshot := store.NodeSnapshot{
 		ID:          "snap-1",
 		RunID:       "run-1",
 		NodeName:    "node-a",
@@ -74,15 +75,16 @@ func TestListNodesIncludesSeparateCollectorAndWorkloadDegradation(t *testing.T) 
 				Source:     "container",
 			}},
 		}},
-	}); err != nil {
-		t.Fatalf("save snapshot: %v", err)
 	}
 
-	handler := newHandlerForTest(deps, fakeCollectorReader{statuses: []collector.NodeStatus{{
-		NodeName:   "node-a",
-		Online:     true,
-		LastSeenAt: core.NowTimestamp(),
-	}}})
+	handler := newHandlerForTest(deps, fakeCollectorReader{
+		statuses: []collector.NodeStatus{{
+			NodeName:   "node-a",
+			Online:     true,
+			LastSeenAt: core.NowTimestamp(),
+		}},
+		snapshots: []store.NodeSnapshot{snapshot},
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil)
 	rec := httptest.NewRecorder()
@@ -106,34 +108,12 @@ func TestListNodesIncludesSeparateCollectorAndWorkloadDegradation(t *testing.T) 
 	}
 }
 
-func TestTriggerRun(t *testing.T) {
-	t.Parallel()
-
-	deps := newTestDeps(t)
-	triggers := 0
-	handler := NewHandler(
-		deps.runs, deps.snapshots, deps.edges, deps.proxyConfigs,
-		fakeCollectorReader{}, triggerFunc(func() { triggers++ }),
-		deps.bus, parser.NewRegistry(),
-	)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
-	}
-	if triggers != 1 {
-		t.Fatalf("triggers = %d, want 1", triggers)
-	}
-}
-
 func TestSetProxyConfig(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	handler := newHandlerForTest(deps, fakeCollectorReader{
+	refresher := &fakeRefreshTrigger{}
+	handler := newHandlerForTestWithRefresh(deps, fakeCollectorReader{
 		previewContent: map[core.NodeName]string{
 			"node-a": `
 server {
@@ -144,7 +124,7 @@ server {
     }
 }`,
 		},
-	})
+	}, refresher)
 
 	body := bytes.NewBufferString(`{"kind":"nginx","config_path":"/etc/nginx/nginx.conf"}`)
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/configs/node-a", body)
@@ -170,6 +150,43 @@ server {
 	}
 	if !strings.Contains(rec.Body.String(), `"listener":{"port":80}`) {
 		t.Fatalf("body = %s", rec.Body.String())
+	}
+	if refresher.called != 1 {
+		t.Fatalf("RefreshNow() calls = %d, want 1", refresher.called)
+	}
+}
+
+func TestDeleteProxyConfigTriggersRefresh(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	config := parser.ProxyConfigInput{
+		ID:         "cfg-delete",
+		NodeName:   "node-a",
+		Kind:       "nginx",
+		ConfigPath: "/etc/nginx/nginx.conf",
+		Content:    "server {}",
+		UpdatedAt:  core.NowTimestamp(),
+	}
+	if err := deps.proxyConfigs.Save(context.Background(), config); err != nil {
+		t.Fatalf("Save(): %v", err)
+	}
+
+	refresher := &fakeRefreshTrigger{}
+	handler := newHandlerForTestWithRefresh(deps, fakeCollectorReader{}, refresher)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/configs/cfg-delete", nil)
+	req.SetPathValue("id", "cfg-delete")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+	if refresher.called != 1 {
+		t.Fatalf("RefreshNow() calls = %d, want 1", refresher.called)
+	}
+	if _, err := deps.proxyConfigs.Get(context.Background(), "cfg-delete"); err == nil {
+		t.Fatal("config still present after delete")
 	}
 }
 
@@ -298,14 +315,8 @@ func TestGetTopology(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	ctx := context.Background()
-	run := store.CollectionRun{ID: "run-1", FinishedAt: core.NowTimestamp()}
-	if err := deps.runs.Save(ctx, run); err != nil {
-		t.Fatalf("save run: %v", err)
-	}
 	snapA := store.NodeSnapshot{
 		ID:          "snap-a",
-		RunID:       "run-1",
 		NodeName:    "node-a",
 		TailscaleIP: "100.64.0.1",
 		CollectedAt: core.NowTimestamp(),
@@ -322,26 +333,18 @@ func TestGetTopology(t *testing.T) {
 	}
 	snapB := store.NodeSnapshot{
 		ID:          "snap-b",
-		RunID:       "run-1",
 		NodeName:    "node-b",
 		TailscaleIP: "100.64.0.2",
 		CollectedAt: core.NowTimestamp(),
 		Ports:       []store.ListenPort{{Port: 8080, Process: "app"}},
 	}
-	for _, snapshot := range []store.NodeSnapshot{snapA, snapB} {
-		if err := deps.snapshots.Save(ctx, snapshot); err != nil {
-			t.Fatalf("save snapshot: %v", err)
-		}
-	}
-	res := resolver.NewResolver(deps.edges, deps.snapshots, deps.bus)
-	if _, err := res.ResolveRun(ctx, run, []store.NodeSnapshot{snapA, snapB}); err != nil {
-		t.Fatalf("ResolveRun(): %v", err)
-	}
-
-	handler := newHandlerForTest(deps, fakeCollectorReader{statuses: []collector.NodeStatus{
-		{NodeName: "node-a", Online: true},
-		{NodeName: "node-b", Online: true},
-	}})
+	handler := newHandlerForTest(deps, fakeCollectorReader{
+		statuses: []collector.NodeStatus{
+			{NodeName: "node-a", Online: true},
+			{NodeName: "node-b", Online: true},
+		},
+		snapshots: []store.NodeSnapshot{snapA, snapB},
+	})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/topology", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -353,8 +356,8 @@ func TestGetTopology(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &topology); err != nil {
 		t.Fatalf("decode topology: %v", err)
 	}
-	if topology.RunID != "run-1" {
-		t.Fatalf("topology.RunID = %q, want run-1", topology.RunID)
+	if topology.Version == 0 {
+		t.Fatalf("topology.Version = %d, want > 0", topology.Version)
 	}
 	if len(topology.Routes) != 1 {
 		t.Fatalf("len(topology.Routes) = %d, want 1", len(topology.Routes))
@@ -371,13 +374,10 @@ func TestHealth(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	if err := deps.runs.Save(context.Background(), store.CollectionRun{
-		ID:         "run-1",
-		FinishedAt: core.NowTimestamp(),
-	}); err != nil {
-		t.Fatalf("save run: %v", err)
-	}
-	handler := newHandlerForTest(deps, fakeCollectorReader{statuses: []collector.NodeStatus{{NodeName: "node-a", Degraded: true}}})
+	handler := newHandlerForTest(deps, fakeCollectorReader{
+		statuses: []collector.NodeStatus{{NodeName: "node-a", Degraded: true}},
+		localIP:  "100.64.0.10",
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	rec := httptest.NewRecorder()
@@ -396,21 +396,17 @@ func TestHealth(t *testing.T) {
 	if health.CollectorDegradedNodeCount != 1 || health.WorkloadDegradedNodeCount != 0 {
 		t.Fatalf("health = %#v, want collector degraded count only", health)
 	}
+	if health.TailnetIP != "100.64.0.10" {
+		t.Fatalf("health.TailnetIP = %q, want %q", health.TailnetIP, "100.64.0.10")
+	}
 }
 
 func TestHealthDegradesForWorkloadIssues(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	if err := deps.runs.Save(context.Background(), store.CollectionRun{
-		ID:         "run-1",
-		FinishedAt: core.NowTimestamp(),
-	}); err != nil {
-		t.Fatalf("save run: %v", err)
-	}
-	if err := deps.snapshots.Save(context.Background(), store.NodeSnapshot{
+	snapshot := store.NodeSnapshot{
 		ID:          "snap-1",
-		RunID:       "run-1",
 		NodeName:    "node-a",
 		TailscaleIP: "100.64.0.1",
 		CollectedAt: core.NowTimestamp(),
@@ -426,10 +422,11 @@ func TestHealthDegradesForWorkloadIssues(t *testing.T) {
 				Source:     "container",
 			}},
 		}},
-	}); err != nil {
-		t.Fatalf("save snapshot: %v", err)
 	}
-	handler := newHandlerForTest(deps, fakeCollectorReader{statuses: []collector.NodeStatus{{NodeName: "node-a"}}})
+	handler := newHandlerForTest(deps, fakeCollectorReader{
+		statuses:  []collector.NodeStatus{{NodeName: "node-a"}},
+		snapshots: []store.NodeSnapshot{snapshot},
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	rec := httptest.NewRecorder()
@@ -454,22 +451,22 @@ func TestWatchNodesSendsInitialSnapshot(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	if err := deps.snapshots.Save(context.Background(), store.NodeSnapshot{
+	snapshot := store.NodeSnapshot{
 		ID:          "snap-1",
-		RunID:       "run-1",
 		NodeName:    "node-a",
 		TailscaleIP: "100.64.0.1",
 		CollectedAt: core.NowTimestamp(),
 		Ports:       []store.ListenPort{{Port: 80}},
-	}); err != nil {
-		t.Fatalf("save snapshot: %v", err)
 	}
 
-	handler := newHandlerForTest(deps, fakeCollectorReader{statuses: []collector.NodeStatus{{
-		NodeName:   "node-a",
-		Online:     true,
-		LastSeenAt: core.NowTimestamp(),
-	}}})
+	handler := newHandlerForTest(deps, fakeCollectorReader{
+		statuses: []collector.NodeStatus{{
+			NodeName:   "node-a",
+			Online:     true,
+			LastSeenAt: core.NowTimestamp(),
+		}},
+		snapshots: []store.NodeSnapshot{snapshot},
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -493,7 +490,7 @@ func TestWatchNodesSendsInitialSnapshot(t *testing.T) {
 	}
 }
 
-func TestWatchNodesStreamsSnapshotUpdates(t *testing.T) {
+func TestWatchNodesStreamsGranularNodeEvents(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
@@ -514,7 +511,45 @@ func TestWatchNodesStreamsSnapshotUpdates(t *testing.T) {
 	}()
 
 	waitForBody(t, rec, "event: nodes.snapshot")
-	core.BroadcastEvent(deps.bus, "snapshot.updated", collector.SnapshotEvent{
+	core.BroadcastEvent(deps.bus, core.EventNodePortsReplaced.String(), collector.NodePortsReplacedEvent{
+		NodeName: "node-a",
+		Ports:    []store.ListenPort{{Port: 80}},
+	})
+	waitForBody(t, rec, "event: "+core.EventNodePortsReplaced.String())
+	if strings.Contains(rec.Body.String(), "event: "+core.EventSnapshotUpdated.String()) {
+		t.Fatalf("nodes stream unexpectedly emitted snapshot.updated: %s", rec.Body.String())
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("expected nodes stream to stop after cancel")
+	}
+}
+
+func TestWatchNodesDoesNotStreamSnapshotUpdates(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	handler := newHandlerForTest(deps, fakeCollectorReader{statuses: []collector.NodeStatus{{
+		NodeName:   "node-a",
+		Online:     true,
+		LastSeenAt: core.NowTimestamp(),
+	}}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes/stream", nil).WithContext(ctx)
+	rec := newStreamingRecorder()
+	done := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	waitForBody(t, rec, "event: nodes.snapshot")
+	core.BroadcastEvent(deps.bus, core.EventSnapshotUpdated.String(), collector.SnapshotEvent{
 		RunID: "run-1",
 		Snapshot: store.NodeSnapshot{
 			ID:          "snap-1",
@@ -525,7 +560,10 @@ func TestWatchNodesStreamsSnapshotUpdates(t *testing.T) {
 			Ports:       []store.ListenPort{{Port: 80}},
 		},
 	})
-	waitForBody(t, rec, "event: snapshot.updated")
+	time.Sleep(100 * time.Millisecond)
+	if strings.Contains(rec.Body.String(), "event: "+core.EventSnapshotUpdated.String()) {
+		t.Fatalf("nodes stream unexpectedly emitted snapshot.updated: %s", rec.Body.String())
+	}
 
 	cancel()
 	select {
@@ -540,22 +578,17 @@ func TestWatchTopologySendsInitialSnapshot(t *testing.T) {
 
 	deps := newTestDeps(t)
 	ctx := context.Background()
-	run := store.CollectionRun{ID: "run-1", FinishedAt: core.NowTimestamp()}
-	if err := deps.runs.Save(ctx, run); err != nil {
-		t.Fatalf("save run: %v", err)
-	}
 	snapA := store.NodeSnapshot{
 		ID:          "snap-a",
-		RunID:       "run-1",
 		NodeName:    "node-a",
 		TailscaleIP: "100.64.0.1",
 		CollectedAt: core.NowTimestamp(),
 		Ports:       []store.ListenPort{{Port: 80, Process: "nginx"}},
 	}
-	if err := deps.snapshots.Save(ctx, snapA); err != nil {
-		t.Fatalf("save snapshot: %v", err)
-	}
-	handler := newHandlerForTest(deps, fakeCollectorReader{statuses: []collector.NodeStatus{{NodeName: "node-a", Online: true}}})
+	handler := newHandlerForTest(deps, fakeCollectorReader{
+		statuses:  []collector.NodeStatus{{NodeName: "node-a", Online: true}},
+		snapshots: []store.NodeSnapshot{snapA},
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/topology/stream", nil).WithContext(ctx)
@@ -567,7 +600,7 @@ func TestWatchTopologySendsInitialSnapshot(t *testing.T) {
 	}()
 
 	waitForBody(t, rec, "event: topology.snapshot")
-	if !strings.Contains(rec.Body.String(), `"run_id":"run-1"`) ||
+	if !strings.Contains(rec.Body.String(), `"version":`) ||
 		!strings.Contains(rec.Body.String(), `"routes":[`) ||
 		!strings.Contains(rec.Body.String(), `"services":[`) {
 		t.Fatalf("body = %s", rec.Body.String())
@@ -583,10 +616,117 @@ func TestWatchTopologySendsInitialSnapshot(t *testing.T) {
 	}
 }
 
+func TestWatchTopologyStreamsNamedPatchEvents(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	handler := newHandlerForTest(deps, fakeCollectorReader{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/topology/stream", nil).WithContext(ctx)
+	rec := newStreamingRecorder()
+	done := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	waitForBody(t, rec, "event: topology.snapshot")
+	core.BroadcastEvent(deps.bus, core.EventTopologyPatch.String(), topology.Patch{
+		Version:      2,
+		ChangedNodes: []core.NodeName{"node-a"},
+		Summary:      store.TopologySummary{NodeCount: 1},
+	})
+	waitForBody(t, rec, "event: topology.patch")
+	if strings.Contains(rec.Body.String(), `event: message`) && strings.Contains(rec.Body.String(), `"event":"topology.patch"`) {
+		t.Fatalf("topology patch unexpectedly emitted as generic message: %s", rec.Body.String())
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("expected topology stream to stop after cancel")
+	}
+}
+
+func TestWatchTopologyStreamsNamedResetEvents(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	handler := newHandlerForTest(deps, fakeCollectorReader{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/topology/stream", nil).WithContext(ctx)
+	rec := newStreamingRecorder()
+	done := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	waitForBody(t, rec, "event: topology.snapshot")
+	core.BroadcastEvent(deps.bus, core.EventTopologyReset.String(), topology.Reset{
+		Reason:   "test",
+		Snapshot: topology.Snapshot{Version: 2},
+	})
+	waitForBody(t, rec, "event: topology.reset")
+	if strings.Contains(rec.Body.String(), `event: message`) && strings.Contains(rec.Body.String(), `"event":"topology.reset"`) {
+		t.Fatalf("topology reset unexpectedly emitted as generic message: %s", rec.Body.String())
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("expected topology stream to stop after cancel")
+	}
+}
+
+func TestWatchTopologyDoesNotStreamSnapshotUpdates(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	handler := newHandlerForTest(deps, fakeCollectorReader{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/topology/stream", nil).WithContext(ctx)
+	rec := newStreamingRecorder()
+	done := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	waitForBody(t, rec, "event: topology.snapshot")
+	core.BroadcastEvent(deps.bus, core.EventSnapshotUpdated.String(), collector.SnapshotEvent{
+		RunID: "run-1",
+		Snapshot: store.NodeSnapshot{
+			ID:          "snap-1",
+			RunID:       "run-1",
+			NodeName:    "node-a",
+			TailscaleIP: "100.64.0.1",
+			CollectedAt: core.NowTimestamp(),
+			Ports:       []store.ListenPort{{Port: 80}},
+		},
+	})
+	time.Sleep(100 * time.Millisecond)
+	if strings.Contains(rec.Body.String(), "event: "+core.EventSnapshotUpdated.String()) {
+		t.Fatalf("topology stream unexpectedly emitted snapshot.updated: %s", rec.Body.String())
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("expected topology stream to stop after cancel")
+	}
+}
+
 type testDeps struct {
-	runs         store.RunStore
-	snapshots    store.SnapshotStore
-	edges        store.EdgeStore
 	proxyConfigs store.ProxyConfigStore
 	bus          *core.EventBus
 }
@@ -600,23 +740,24 @@ func newTestDeps(t *testing.T) testDeps {
 		t.Fatalf("OpenSQLite(): %v", err)
 	}
 	return testDeps{
-		runs:         db.Runs(),
-		snapshots:    db.Snapshots(),
-		edges:        db.Edges(),
 		proxyConfigs: db.ProxyConfigs(),
 		bus:          core.NewEventBus(),
 	}
 }
 
 func newHandlerForTest(deps testDeps, fake fakeCollectorReader) http.Handler {
+	return newHandlerForTestWithRefresh(deps, fake, nil)
+}
+
+func newHandlerForTestWithRefresh(deps testDeps, fake fakeCollectorReader, refresher refreshTrigger) http.Handler {
 	fake.statuses = append([]collector.NodeStatus(nil), fake.statuses...)
+	topologyManager := topology.NewManager()
+	topologyManager.Reset(fake.snapshots, fake.statuses, "test")
 	return NewHandler(
-		deps.runs,
-		deps.snapshots,
-		deps.edges,
 		deps.proxyConfigs,
 		fake,
-		triggerFunc(func() {}),
+		topologyManager,
+		refresher,
 		deps.bus,
 		parser.NewRegistry(),
 	)
@@ -624,7 +765,19 @@ func newHandlerForTest(deps testDeps, fake fakeCollectorReader) http.Handler {
 
 type fakeCollectorReader struct {
 	statuses       []collector.NodeStatus
+	snapshots      []store.NodeSnapshot
 	previewContent map[core.NodeName]string
+	localIP        string
+}
+
+type fakeRefreshTrigger struct {
+	called int
+	err    error
+}
+
+func (f *fakeRefreshTrigger) RefreshNow(context.Context) error {
+	f.called++
+	return f.err
 }
 
 func (f fakeCollectorReader) GetStatus(context.Context) ([]collector.NodeStatus, error) {
@@ -640,9 +793,22 @@ func (f fakeCollectorReader) PreviewProxyConfig(_ context.Context, nodeName core
 	return content, map[string]string{configPath: content}, parsed, err
 }
 
-type triggerFunc func()
+func (f fakeCollectorReader) LatestSnapshot(nodeName core.NodeName) (store.NodeSnapshot, bool) {
+	for _, snapshot := range f.snapshots {
+		if snapshot.NodeName == nodeName {
+			return snapshot, true
+		}
+	}
+	return store.NodeSnapshot{}, false
+}
 
-func (f triggerFunc) Trigger() { f() }
+func (f fakeCollectorReader) Snapshots() []store.NodeSnapshot {
+	return append([]store.NodeSnapshot(nil), f.snapshots...)
+}
+
+func (f fakeCollectorReader) LocalTailscaleIP(context.Context) (string, error) {
+	return f.localIP, nil
+}
 
 type streamingRecorder struct {
 	*httptest.ResponseRecorder

@@ -1,7 +1,6 @@
 import { useState } from 'react'
-import type { CollectionRun, HealthResponse, NodeResponse } from '../../api/types'
+import type { HealthResponse, NodeResponse } from '../../api/types'
 import { NodeList } from './NodeList'
-import { TriggerButton } from './TriggerButton'
 import { StatusDot } from '../shared/StatusDot'
 import { Spinner } from '../shared/Spinner'
 import { formatRelativeTime } from '../../lib/time'
@@ -11,12 +10,8 @@ interface SidebarProps {
   isHealthLoading: boolean
   nodes: NodeResponse[]
   isNodesLoading: boolean
-  latestRun: CollectionRun | null
-  isRunsLoading: boolean
   selectedNodeName: string | null
   onSelectNode: (nodeName: string) => void
-  onTriggerRun: () => void
-  isTriggeringRun: boolean
 }
 
 export function Sidebar(props: SidebarProps) {
@@ -93,24 +88,15 @@ export function Sidebar(props: SidebarProps) {
                 value={String(props.health?.workload_degraded_node_count ?? 0)}
               />
               <HealthRow
-                label="Last run"
-                value={formatRelativeTime(
-                  props.latestRun?.finished_at ?? props.health?.last_run_at,
-                )}
+                label="Updated"
+                value={formatRelativeTime(props.health?.updated_at)}
               />
               <HealthRow
-                label="Last result"
-                value={formatRunSummary(props.latestRun, props.isRunsLoading)}
+                label="Topology version"
+                value={String(props.health?.topology_version ?? 0)}
               />
             </dl>
           ) : null}
-        </div>
-
-        <div className="mt-4">
-          <TriggerButton
-            onClick={props.onTriggerRun}
-            isLoading={props.isTriggeringRun}
-          />
         </div>
       </div>
 
@@ -122,19 +108,6 @@ export function Sidebar(props: SidebarProps) {
       />
     </aside>
   )
-}
-
-function formatRunSummary(
-  latestRun: CollectionRun | null,
-  isRunsLoading: boolean,
-): string {
-  if (latestRun) {
-    return latestRun.error_count > 0
-      ? `${latestRun.error_count} errors`
-      : `${latestRun.node_count} nodes clean`
-  }
-
-  return isRunsLoading ? 'Loading' : 'Pending'
 }
 
 function HealthRow(props: {

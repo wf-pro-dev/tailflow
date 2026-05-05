@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo } from 'react'
+import { useDeferredValue, useEffect, useMemo, useRef } from 'react'
 import {
   Background,
   BackgroundVariant,
@@ -20,8 +20,6 @@ interface TopologyCanvasProps {
   inventoryNodesByName: Record<string, NodeResponse>
   selectedNodeName: string | null
   onSelectNode: (nodeName: string) => void
-  onCollectNow: () => void
-  isCollecting: boolean
 }
 
 const nodeTypes = {
@@ -37,6 +35,7 @@ function TopologyCanvasInner(props: TopologyCanvasProps) {
 
   const deferredTopology = useDeferredValue(props.topology)
   const reactFlow = useReactFlow()
+  const hasAutoFitOnceRef = useRef(false)
 
   const canvasLayout = useMemo(() => {
     if (!deferredTopology) {
@@ -79,28 +78,34 @@ function TopologyCanvasInner(props: TopologyCanvasProps) {
     console.debug('[tailflow:canvas] layout', {
       nodes: canvasLayout.nodes.length,
       edges: canvasLayout.edges.length,
-      runID: deferredTopology.run_id,
+      version: deferredTopology.version,
       updatedAt: deferredTopology.updated_at,
     })
   }, [canvasLayout.edges.length, canvasLayout.nodes.length, deferredTopology])
 
   useEffect(() => {
     if (!deferredTopology || canvasLayout.nodes.length === 0) {
+      hasAutoFitOnceRef.current = false
       return
     }
 
+    if (hasAutoFitOnceRef.current) {
+      return
+    }
+
+    hasAutoFitOnceRef.current = true
     void reactFlow.fitView({ padding: 0.16, duration: 250 })
-  }, [canvasLayout.nodes.length, deferredTopology?.run_id, reactFlow])
+  }, [canvasLayout.nodes.length, deferredTopology, reactFlow])
 
   if (!deferredTopology || deferredTopology.nodes.length === 0) {
     return (
-      <EmptyCanvas
-        title="No topology data yet."
-        description="Trigger a collection run to populate the graph. The canvas is wired and waiting for the backend to return a topology snapshot."
-        onCollect={props.onCollectNow}
-        isCollecting={props.isCollecting}
-      />
-    )
+        <EmptyCanvas
+          title="No topology data yet."
+          description="Tailflow is waiting for live topology data from the backend."
+          onCollect={() => undefined}
+          isCollecting={false}
+        />
+      )
   }
 
   return (

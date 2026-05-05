@@ -34,6 +34,11 @@ interface EventStreamOptions {
   onEvent?: (event: StreamEvent) => void
 }
 
+interface WrappedStreamEvent {
+  event?: unknown
+  data?: unknown
+}
+
 function buildStreamUrl(path: string, lastEventId: string | null): string {
   if (!env.apiBaseUrl) {
     const url = new URL(path, window.location.origin)
@@ -60,6 +65,24 @@ function parseEventData(rawEvent: MessageEvent<string>): unknown {
   }
 
   return JSON.parse(rawEvent.data) as unknown
+}
+
+function normalizeWrappedEvent(
+  rawData: unknown,
+): { name: string; data: unknown } | null {
+  if (!rawData || typeof rawData !== 'object') {
+    return null
+  }
+
+  const wrapped = rawData as WrappedStreamEvent
+  if (typeof wrapped.event !== 'string') {
+    return null
+  }
+
+  return {
+    name: wrapped.event,
+    data: wrapped.data,
+  }
 }
 
 export function createEventStream(
@@ -118,9 +141,25 @@ export function createEventStream(
     }
 
     try {
+      const rawData = parseEventData(rawEvent)
+      if (name === 'message') {
+        const wrappedEvent = normalizeWrappedEvent(rawData)
+        if (!wrappedEvent || !options.eventNames.includes(wrappedEvent.name)) {
+          return
+        }
+
+        options.onEvent?.({
+          name: wrappedEvent.name,
+          data: wrappedEvent.data,
+          lastEventId,
+          rawEvent,
+        })
+        return
+      }
+
       options.onEvent?.({
         name,
-        data: parseEventData(rawEvent),
+        data: rawData,
         lastEventId,
         rawEvent,
       })
@@ -151,6 +190,9 @@ export function createEventStream(
         handleStreamEvent(eventName, rawEvent as MessageEvent<string>)
       })
     }
+    eventSource.addEventListener('message', (rawEvent) => {
+      handleStreamEvent('message', rawEvent as MessageEvent<string>)
+    })
   }
 
   connect()

@@ -93,6 +93,7 @@ export interface TopologyNodeResponse {
   degraded?: boolean
   collector_degraded?: boolean
   workload_degraded?: boolean
+  last_seen_at: Timestamp
   collector_error?: string
   workload_issues?: string[]
   ports: ListenPort[]
@@ -201,7 +202,7 @@ export interface TopologySummary {
 }
 
 export interface TopologyResponse {
-  run_id: ID
+  version: number
   nodes: TopologyNodeResponse[]
   services: Service[]
   runtimes: Runtime[]
@@ -211,14 +212,6 @@ export interface TopologyResponse {
   evidence: Evidence[]
   summary: TopologySummary
   updated_at: Timestamp
-}
-
-export interface CollectionRun {
-  id: ID
-  started_at: Timestamp
-  finished_at: Timestamp
-  node_count: number
-  error_count: number
 }
 
 export interface NodeSnapshot {
@@ -242,17 +235,13 @@ export interface NodeStatus {
   last_error?: string
 }
 
-export interface TriggerRunResponse {
-  accepted: boolean
-  started_at: Timestamp
-}
-
 export interface HealthResponse {
   status: string
   node_count: number
   collector_degraded_node_count?: number
   workload_degraded_node_count?: number
-  last_run_at: Timestamp
+  updated_at: Timestamp
+  topology_version: number
   tailnet_ip: string
 }
 
@@ -307,26 +296,6 @@ export interface ApiErrorResponse {
   hint?: string
 }
 
-export interface SnapshotEvent {
-  run_id: ID
-  snapshot: NodeSnapshot
-}
-
-export interface NodeStatusEvent {
-  previous: NodeStatus
-  current: NodeStatus
-}
-
-export interface PortBoundEvent {
-  node_name: NodeName
-  port: ListenPort
-}
-
-export interface PortReleasedEvent {
-  node_name: NodeName
-  port: ListenPort
-}
-
 export interface EdgeDiff {
   added: TopologyEdge[]
   removed: TopologyEdge[]
@@ -337,4 +306,30 @@ export interface EdgeEvent {
   run_id: ID
   edges: TopologyEdge[]
   diff: EdgeDiff
+}
+
+export interface TopologyPatch {
+  version: number
+  updated_at: Timestamp
+  changed_nodes: NodeName[]
+  nodes_upserted: TopologyNodeResponse[]
+  nodes_removed: NodeName[]
+  services_upserted: Service[]
+  services_removed: ID[]
+  runtimes_upserted: Runtime[]
+  runtimes_removed: ID[]
+  exposures_upserted: Exposure[]
+  exposures_removed: ID[]
+  routes_upserted: Route[]
+  routes_removed: ID[]
+  route_hops_upserted: RouteHop[]
+  route_hops_removed: ID[]
+  evidence_upserted: Evidence[]
+  evidence_removed: ID[]
+  summary: TopologySummary
+}
+
+export interface TopologyReset {
+  reason: string
+  snapshot: TopologyResponse
 }

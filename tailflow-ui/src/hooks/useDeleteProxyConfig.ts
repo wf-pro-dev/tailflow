@@ -6,7 +6,6 @@ import {
   proxyConfigQueryKey,
   proxyConfigsQueryKey,
 } from './useProxyConfigs'
-import { runsQueryKey } from './useRuns'
 import { topologyQueryKey } from './useTopology'
 
 interface DeleteProxyConfigVariables {
@@ -31,7 +30,6 @@ export function useDeleteProxyConfig() {
           queryKey: proxyConfigsQueryKey(variables.nodeName),
         }),
         queryClient.invalidateQueries({ queryKey: topologyQueryKey }),
-        queryClient.invalidateQueries({ queryKey: runsQueryKey }),
         queryClient.invalidateQueries({ queryKey: nodesQueryKey }),
         queryClient.invalidateQueries({ queryKey: healthQueryKey }),
       ])

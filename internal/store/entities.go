@@ -161,15 +161,6 @@ type TopologySummary struct {
 	UnresolvedRouteCount int `json:"unresolved_route_count"`
 }
 
-// CollectionRun groups all snapshots collected in one cycle.
-type CollectionRun struct {
-	ID         core.ID        `json:"id" db:"id"`
-	StartedAt  core.Timestamp `json:"started_at" db:"started_at"`
-	FinishedAt core.Timestamp `json:"finished_at" db:"finished_at"`
-	NodeCount  int            `json:"node_count" db:"node_count"`
-	ErrorCount int            `json:"error_count" db:"error_count"`
-}
-
 // NodeSnapshot is the collected state for one node at one point in time.
 type NodeSnapshot struct {
 	ID          core.ID                `json:"id" db:"id"`
@@ -236,10 +227,4 @@ type ProxyConfigStore interface {
 	GetByNodeAndPath(ctx context.Context, nodeName core.NodeName, configPath string) (parser.ProxyConfigInput, error)
 	ListByNode(ctx context.Context, nodeName core.NodeName) ([]parser.ProxyConfigInput, error)
 	ListAll(ctx context.Context) ([]parser.ProxyConfigInput, error)
-}
-
-// RunStore provides CRUD and query operations for collection runs.
-type RunStore interface {
-	core.Repository[CollectionRun]
-	Latest(ctx context.Context) (CollectionRun, error)
 }
