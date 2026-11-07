@@ -232,8 +232,10 @@ func (e *NotFoundError) Error() string {
 
 // Fleet is a source.Fleet that returns client.HostScope values backed by a
 // Backend. Discover returns a fixed list of client.Host values supplied at
-// construction time.
+// construction time. SetHosts can be called concurrently with Discover to
+// change the list mid-test (e.g. to simulate a host appearing/disappearing).
 type Fleet struct {
+        mu    sync.RWMutex
         Hosts []client.Host
         B     *Backend
 }
@@ -244,9 +246,22 @@ func NewFleet(hosts []client.Host, b *Backend) *Fleet {
         return &Fleet{Hosts: hosts, B: b}
 }
 
-// Discover implements source.Fleet.
+// SetHosts replaces the host list. Safe to call while the collector is
+// running (the next Discover call will see the new list).
+func (f *Fleet) SetHosts(hosts []client.Host) {
+        f.mu.Lock()
+        defer f.mu.Unlock()
+        f.Hosts = hosts
+}
+
+// Discover implements source.Fleet. Returns a copy of the current host list
+// so the caller can't race with SetHosts.
 func (f *Fleet) Discover(ctx context.Context) ([]client.Host, error) {
-        return f.Hosts, nil
+        f.mu.RLock()
+        defer f.mu.RUnlock()
+        out := make([]client.Host, len(f.Hosts))
+        copy(out, f.Hosts)
+        return out, nil
 }
 
 // Host implements source.Fleet.
@@ -375,16 +390,21 @@ func (c *Clock) Advance(d time.Duration) {
         c.now = target
         var pending []*fakeTimer
         for _, t := range c.timers {
+                // Lock each timer's own mutex to avoid racing with Stop()/Reset().
+                t.mu.Lock()
                 if t.fired || t.stopped {
+                        t.mu.Unlock()
                         continue
                 }
                 if !t.deadline.After(target) {
                         t.fired = true
+                        t.mu.Unlock()
                         select {
                         case t.c <- t.deadline:
                         default:
                         }
                 } else {
+                        t.mu.Unlock()
                         pending = append(pending, t)
                 }
         }
@@ -403,16 +423,20 @@ func (c *Clock) SetTime(t time.Time) {
         c.now = t
         var pending []*fakeTimer
         for _, tm := range c.timers {
+                tm.mu.Lock()
                 if tm.fired || tm.stopped {
+                        tm.mu.Unlock()
                         continue
                 }
                 if !tm.deadline.After(t) {
                         tm.fired = true
+                        tm.mu.Unlock()
                         select {
                         case tm.c <- tm.deadline:
                         default:
                         }
                 } else {
+                        tm.mu.Unlock()
                         pending = append(pending, tm)
                 }
         }

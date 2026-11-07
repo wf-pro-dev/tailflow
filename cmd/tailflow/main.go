@@ -28,8 +28,29 @@ import (
         "github.com/wf-pro-dev/tailkit"
 
         "github.com/wf-pro-dev/tailflow/internal/api"
+        "github.com/wf-pro-dev/tailflow/internal/collector"
         "github.com/wf-pro-dev/tailflow/internal/config"
+        hubpkg "github.com/wf-pro-dev/tailflow/internal/hub"
+        "github.com/wf-pro-dev/tailflow/internal/source"
+        "github.com/wf-pro-dev/tailflow/internal/source/fakesource"
+        "github.com/wf-pro-dev/tailflow/internal/state"
 )
+
+// hubAdapter bridges state.HubPublisher to hub.Hub. We need this because
+// internal/state cannot import internal/hub (depguard rule: state imports
+// neither tailkit nor hub). The adapter lives here in cmd/tailflow where
+// both packages are visible.
+type hubAdapter struct {
+        hub *hubpkg.Hub
+}
+
+func (a hubAdapter) Publish(e state.HubEvent) {
+        a.hub.Publish(hubpkg.HubEvent{
+                Topic: e.Topic,
+                Name:  e.Name,
+                Data:  e.Data,
+        })
+}
 
 // version is set at build time via -ldflags "-X main.version=...".
 var version = "dev"
@@ -104,7 +125,51 @@ func cmdServe(args []string) error {
                 StaleFactor:    cfg.StaleFactor,
         }
 
-        handler := api.NewHandler(cfg.BasePath, version, tailkitVersion, bufferCfg, nil)
+        // In-memory state store. Ring capacity = window / step (default 720 for 1h/5s).
+        ringCapacity := int(cfg.HistoryWindow / cfg.HistoryStep)
+        if ringCapacity < 1 {
+                ringCapacity = 720
+        }
+        store := state.New(ringCapacity)
+
+        // Hub for SSE fan-out (M2 will wire the /api/v1/stream endpoint; for M1
+        // we just construct it so the store can publish events).
+        hub := hubpkg.NewHub()
+        store.SetHub(hubAdapter{hub: hub})
+
+        // Build the Fleet: fakesource in local mode (M1 has no real tailnet
+        // wiring yet — that needs tsnet which lands with the integration tests),
+        // tailkitsrc in tailnet mode.
+        var fleet source.Fleet
+        switch cfg.Mode {
+        case config.ModeLocal:
+                logger.Warn("local mode: using empty fakesource fleet; no hosts will appear. Set TAILFLOW_MODE=tailnet once tsnet is wired.")
+                fleet = fakesource.NewFleet(nil, &fakesource.Backend{Script: fakesource.NewScript()})
+        case config.ModeTailnet:
+                // tsnet wiring lands in M2 with the integration test harness.
+                // For M1 we fall back to fakesource so the build is runnable.
+                logger.Warn("tailnet mode: tsnet wiring not yet implemented in M1; using empty fakesource fleet as placeholder")
+                fleet = fakesource.NewFleet(nil, &fakesource.Backend{Script: fakesource.NewScript()})
+        }
+
+        // Collector runs the discovery loop and per-host supervisors.
+        collectorCfg := collector.Config{
+                DiscoveryInterval: cfg.DiscoveryInterval,
+                HistoryStep:       cfg.HistoryStep,
+                CallTimeout:       cfg.CallTimeout,
+                StaleFactor:       cfg.StaleFactor,
+                DegradeThreshold:  cfg.DegradeThreshold,
+                MaxHosts:          cfg.MaxHosts,
+        }
+        col := collector.New(fleet, store, source.SystemClock{}, logger, collectorCfg)
+        collectorCtx, cancelCollector := context.WithCancel(context.Background())
+        go func() {
+                if err := col.Run(collectorCtx); err != nil && !errors.Is(err, context.Canceled) {
+                        logger.Error("collector exited", "err", err)
+                }
+        }()
+
+        handler := api.NewHandler(cfg.BasePath, version, tailkitVersion, cfg, store, bufferCfg, nil)
 
         // Health listener: always loopback, even in tailnet mode, so the
         // container health check can reach it without going over the tailnet
@@ -153,6 +218,9 @@ func cmdServe(args []string) error {
 
         <-ctx.Done()
         logger.Info("shutdown signal received; draining for up to 10s")
+
+        // Stop the collector first so it stops writing to the store.
+        cancelCollector()
 
         shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
         defer cancel()

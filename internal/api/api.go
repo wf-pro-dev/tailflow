@@ -1,6 +1,6 @@
 // Package api owns Tailflow's HTTP handlers, middleware, and generated
-// OpenAPI types. In M0 only the healthz, meta, and SPA-fallback routes are
-// wired; the full /api/v1/* contract lands in M1.
+// OpenAPI types. M1 wires /api/v1/hosts/* and /api/v1/fleet/summary; the
+// remaining endpoints (processes, ports, docker, stream) land in M2-M4.
 //
 // Import rules (enforced by .golangci.yml depguard):
 //   - This package MUST NOT import tailkit or tailkit/client. It uses only
@@ -14,10 +14,13 @@ import (
         "net/http"
         "strings"
         "time"
+
+        "github.com/wf-pro-dev/tailflow/internal/config"
+        "github.com/wf-pro-dev/tailflow/internal/state"
 )
 
-// Handler is the Tailflow HTTP handler. In M0 it routes only /api/v1/healthz
-// and /api/v1/meta plus an SPA fallback; future milestones add the rest.
+// Handler is the Tailflow HTTP handler. It routes /api/v1/* to the
+// appropriate handler and serves the SPA for any other path.
 //
 // The handler is mounted under a configurable base path (default /), so the
 // same handler can later be mounted at /ui inside tailkitd (design §F10).
@@ -26,9 +29,11 @@ type Handler struct {
         version  string
         startedAt time.Time
         tailkitVersion string
+        cfg      config.Config
+        store    *state.Store
         bufferCfg BufferConfig
-        // spaFS is the embed.FS for the SPA. nil in M0 (no SPA yet); when set,
-        // unknown non-API paths fall back to index.html.
+        // spaFS is the embed.FS for the SPA. nil until M2; when set, unknown
+        // non-API paths fall back to index.html.
         spaFS http.FileSystem
 }
 
@@ -43,7 +48,7 @@ type BufferConfig struct {
 
 // NewHandler returns a Handler. basepath must start with "/" and end without
 // one (e.g. "/", "/ui"); trailing slashes are stripped.
-func NewHandler(basepath, version, tailkitVersion string, bufferCfg BufferConfig, spaFS http.FileSystem) *Handler {
+func NewHandler(basepath, version, tailkitVersion string, cfg config.Config, store *state.Store, bufferCfg BufferConfig, spaFS http.FileSystem) *Handler {
         if !strings.HasPrefix(basepath, "/") {
                 basepath = "/" + basepath
         }
@@ -56,6 +61,8 @@ func NewHandler(basepath, version, tailkitVersion string, bufferCfg BufferConfig
                 version:        version,
                 startedAt:      time.Now(),
                 tailkitVersion: tailkitVersion,
+                cfg:            cfg,
+                store:          store,
                 bufferCfg:      bufferCfg,
                 spaFS:          spaFS,
         }
@@ -79,15 +86,53 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         case path == "/api/v1/meta":
                 h.handleMeta(w, r)
                 return
+        case path == "/api/v1/fleet/summary":
+                h.handleFleetSummary(w, r)
+                return
+        case path == "/api/v1/hosts":
+                h.handleListHosts(w, r)
+                return
+        case isHostPath(path):
+                h.routeHostPath(w, r, path)
+                return
         case strings.HasPrefix(path, "/api/v1/"):
-                // Not yet implemented in M0 — return 501 so the contract is honest.
+                // Endpoint exists in the OpenAPI spec but not yet wired (M2-M4).
                 h.writeProblem(w, r, http.StatusNotImplemented, "not-implemented",
-                        "Not implemented in M0", path+" is not wired yet", "")
+                        "Not implemented in this milestone", path+" is not wired yet", "")
                 return
         default:
-                // SPA fallback. In M0 there is no SPA yet; serve a tiny placeholder.
+                // SPA fallback.
                 h.spaFallback(w, r, path)
                 return
+        }
+}
+
+// isHostPath returns true for any /api/v1/hosts/{host}[/...] path.
+func isHostPath(path string) bool {
+        return strings.HasPrefix(path, "/api/v1/hosts/") && len(path) > len("/api/v1/hosts/")
+}
+
+// routeHostPath dispatches the per-host endpoints.
+func (h *Handler) routeHostPath(w http.ResponseWriter, r *http.Request, path string) {
+        rest := strings.TrimPrefix(path, "/api/v1/hosts/")
+        parts := strings.SplitN(rest, "/", 2)
+        host := parts[0]
+        sub := ""
+        if len(parts) > 1 {
+                sub = parts[1]
+        }
+        r.SetPathValue("host", host)
+
+        switch {
+        case sub == "" && r.Method == http.MethodGet:
+                h.handleGetHost(w, r)
+        case sub == "metrics" && r.Method == http.MethodGet:
+                h.handleHostMetrics(w, r)
+        case sub == "metrics/latest" && r.Method == http.MethodGet:
+                h.handleHostMetricsLatest(w, r)
+        default:
+                h.writeProblem(w, r, http.StatusNotFound, "not-found",
+                        "Not found", "no such endpoint: "+path, host)
         }
 }
 
@@ -132,25 +177,6 @@ func (h *Handler) spaFallback(w http.ResponseWriter, r *http.Request, path strin
         w.Header().Set("Content-Type", "text/html; charset=utf-8")
         w.Header().Set("Cache-Control", "no-store")
         _, _ = w.Write([]byte(m0PlaceholderHTML))
-}
-
-// writeProblem emits an RFC 9457 problem+json response. host is optional.
-// In M0 we don't yet have a request ID middleware; that lands with the full
-// API in M1.
-func (h *Handler) writeProblem(w http.ResponseWriter, r *http.Request, status int, typ, title, detail, host string) {
-        if host != "" {
-                // host is included only when set
-        }
-        w.Header().Set("Content-Type", "application/problem+json")
-        w.Header().Set("Cache-Control", "no-store")
-        w.WriteHeader(status)
-        _ = json.NewEncoder(w).Encode(map[string]any{
-                "type":    typ,
-                "title":   title,
-                "status":  status,
-                "detail":  detail,
-                "host":    host,
-        })
 }
 
 const m0PlaceholderHTML = `<!DOCTYPE html>
