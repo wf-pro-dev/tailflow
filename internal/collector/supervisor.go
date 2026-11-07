@@ -32,14 +32,14 @@ func (c *Collector) runSupervisor(ctx context.Context, h client.Host) {
 
         // Seed the store with the host's static fields. The capability probe
         // will fill in Caps shortly; until then the host appears with zero caps.
-        c.store.UpsertHost(mapHost(h, c.cfg.HistoryStep))
+        c.store.UpsertHost(mapHost(h, c.cfg.StreamInterval))
 
         scope := c.fleet.Host(hostName)
 
         // Initial capability probe (synchronous) so the supervisor knows which
         // loops to start.
         caps := c.probeCapabilities(ctx, scope, hostName, logger)
-        c.store.UpsertHost(withCaps(mapHost(h, c.cfg.HistoryStep), caps))
+        c.store.UpsertHost(withCaps(mapHost(h, c.cfg.StreamInterval), caps))
 
         // Errgroup with the host's context. When any loop returns an error
         // (other than ctx.Err()), the group cancels the others.

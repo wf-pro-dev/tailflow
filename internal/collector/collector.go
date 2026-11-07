@@ -55,6 +55,7 @@ type Collector struct {
 type Config struct {
         DiscoveryInterval time.Duration
         HistoryStep       time.Duration
+        StreamInterval    time.Duration // tailkitd's emission rate (2s until U1, design D2)
         CallTimeout       time.Duration
         StaleFactor       int
         DegradeThreshold  int
@@ -165,7 +166,7 @@ func (c *Collector) reconcile(ctx context.Context, discovered []client.Host) {
         for name, h := range discoveredNames {
                 if _, running := c.supervisors[name]; running {
                         // Already running — update the host's static fields.
-                        c.store.UpsertHost(mapHost(h, c.cfg.HistoryStep))
+                        c.store.UpsertHost(mapHost(h, c.cfg.StreamInterval))
                         continue
                 }
                 // Start a new supervisor.
@@ -241,6 +242,25 @@ func mapHost(h client.Host, streamInterval time.Duration) state.Host {
                 Online:         h.Online,
                 AgentOnline:    agentOnline,
                 StreamInterval: streamInterval,
+                // Initial status: set from Online/AgentOnline so the API never returns
+                // an empty status string before the status loop runs. The status loop
+                // will overwrite this within 1s with the full DeriveStatus result.
+                Status: initialStatus(h.Online, agentOnline),
+        }
+}
+
+// initialStatus returns a best-effort status for a freshly-discovered host,
+// before the status loop has run. The status loop will overwrite this within
+// 1s with the full DeriveStatus result (which also considers sample freshness
+// and failure counts).
+func initialStatus(online, agentOnline bool) state.Status {
+        switch {
+        case !online:
+                return state.StatusOffline
+        case !agentOnline:
+                return state.StatusNoAgent
+        default:
+                return state.StatusHealthy
         }
 }
 

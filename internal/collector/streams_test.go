@@ -43,6 +43,7 @@ func TestF7_01_RefcountingOpensOnceClosesAfterGrace(t *testing.T) {
         cfg := Config{
                 DiscoveryInterval: 5 * time.Second,
                 HistoryStep:       5 * time.Second,
+		StreamInterval:    2 * time.Second,
                 CallTimeout:       2 * time.Second,
                 StaleFactor:       3,
                 DegradeThreshold:  3,
@@ -211,7 +212,7 @@ func TestSubscribeUnrelatedContainers(t *testing.T) {
         store.UpsertHost(state.Host{Name: "vps-1", Online: true, Status: state.StatusHealthy})
         clk := testClock{Clock: fakesource.NewClock(time.Unix(1000, 0))}
         fleet := fakesource.NewFleet([]client.Host{{Name: "vps-1", Online: true}}, b)
-        cfg := Config{DiscoveryInterval: 5 * time.Second, HistoryStep: 5 * time.Second, CallTimeout: 2 * time.Second, StaleFactor: 3, DegradeThreshold: 3, MaxHosts: 100}
+        cfg := Config{DiscoveryInterval: 5 * time.Second, HistoryStep: 5 * time.Second, StreamInterval: 2 * time.Second, CallTimeout: 2 * time.Second, StaleFactor: 3, DegradeThreshold: 3, MaxHosts: 100}
         col := New(fleet, store, clk, testLogger(), cfg)
         sm := col.Streams()
 

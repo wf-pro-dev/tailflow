@@ -171,9 +171,11 @@ func cmdServe(args []string) error {
         }
 
         // Collector runs the discovery loop and per-host supervisors.
+        // StreamInterval is 2s (design D2) until tailkitd exposes it via U1.
         collectorCfg := collector.Config{
                 DiscoveryInterval: cfg.DiscoveryInterval,
                 HistoryStep:       cfg.HistoryStep,
+                StreamInterval:    2 * time.Second,
                 CallTimeout:       cfg.CallTimeout,
                 StaleFactor:       cfg.StaleFactor,
                 DegradeThreshold:  cfg.DegradeThreshold,

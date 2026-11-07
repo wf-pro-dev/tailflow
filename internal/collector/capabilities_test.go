@@ -21,6 +21,7 @@ func testCollector(t *testing.T, b *fakesource.Backend) (*Collector, *state.Stor
         cfg := Config{
                 DiscoveryInterval: 5 * time.Second,
                 HistoryStep:       5 * time.Second,
+		StreamInterval:    2 * time.Second,
                 CallTimeout:       2 * time.Second,
                 StaleFactor:       3,
                 DegradeThreshold:  3,

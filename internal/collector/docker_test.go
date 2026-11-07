@@ -56,6 +56,7 @@ func TestF6_01_DebounceFiftyEventsToOneRefetch(t *testing.T) {
         cfg := Config{
                 DiscoveryInterval: 5 * time.Second,
                 HistoryStep:       5 * time.Second,
+		StreamInterval:    2 * time.Second,
                 CallTimeout:       2 * time.Second,
                 StaleFactor:       3,
                 DegradeThreshold:  3,

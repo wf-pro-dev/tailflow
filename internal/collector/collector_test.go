@@ -38,6 +38,7 @@ func TestF1_01_NewHostAppears(t *testing.T) {
         cfg := Config{
                 DiscoveryInterval: 5 * time.Second,
                 HistoryStep:       5 * time.Second,
+		StreamInterval:    2 * time.Second,
                 CallTimeout:       2 * time.Second,
                 StaleFactor:       3,
                 DegradeThreshold:  3,
@@ -99,7 +100,7 @@ func TestF1_02_HostDisappears(t *testing.T) {
         })
         fleet := fakesource.NewFleet([]client.Host{host}, b)
 
-        cfg := Config{DiscoveryInterval: 5 * time.Second, HistoryStep: 5 * time.Second, CallTimeout: 2 * time.Second, StaleFactor: 3, DegradeThreshold: 3, MaxHosts: 100}
+        cfg := Config{DiscoveryInterval: 5 * time.Second, HistoryStep: 5 * time.Second, StreamInterval: 2 * time.Second, CallTimeout: 2 * time.Second, StaleFactor: 3, DegradeThreshold: 3, MaxHosts: 100}
         col := New(fleet, store, clk, logger, cfg)
 
         ctx, cancel := context.WithCancel(context.Background())
@@ -134,7 +135,7 @@ func TestF1_03_UnchangedListNoEvents(t *testing.T) {
         b.Script.Add("vps-1", "GET", "/docker/config", fakesource.Response{Status: 503, ErrorBody: `{"error":"docker not configured"}`})
         fleet := fakesource.NewFleet([]client.Host{host}, b)
 
-        cfg := Config{DiscoveryInterval: 5 * time.Second, HistoryStep: 5 * time.Second, CallTimeout: 2 * time.Second, StaleFactor: 3, DegradeThreshold: 3, MaxHosts: 100}
+        cfg := Config{DiscoveryInterval: 5 * time.Second, HistoryStep: 5 * time.Second, StreamInterval: 2 * time.Second, CallTimeout: 2 * time.Second, StaleFactor: 3, DegradeThreshold: 3, MaxHosts: 100}
         col := New(fleet, store, clk, testLogger(), cfg)
 
         ctx, cancel := context.WithCancel(context.Background())
