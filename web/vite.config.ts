@@ -25,11 +25,14 @@ export default defineConfig({
   build: {
     outDir: "dist",
     sourcemap: true,
+    // No manualChunks: let Vite handle code splitting. Manually splitting
+    // react and react-dom from @tanstack/* creates a circular chunk graph
+    // (tanstack depends on react, react depends on nothing) that breaks
+    // runtime loading — react-dom sees `undefined` for react's internals.
     rollupOptions: {
       output: {
+        // Only split the heavy vendor libs that don't depend on react.
         manualChunks: {
-          react: ["react", "react-dom"],
-          tanstack: ["@tanstack/react-query", "@tanstack/react-router", "@tanstack/react-table", "@tanstack/react-virtual"],
           uplot: ["uplot"],
         },
       },
