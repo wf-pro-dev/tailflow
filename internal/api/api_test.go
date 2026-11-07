@@ -23,7 +23,7 @@ func testHandler(t *testing.T, store *state.Store) *Handler {
         }
         cfg := config.Default()
         hub := hubpkg.NewHub()
-        return NewHandler("/", "1.0.0", "v0.5.4", cfg, store, hub, BufferConfig{
+        return NewHandler("/", "1.0.0", "v0.5.4", cfg, store, hub, nil, BufferConfig{
                 HistoryWindow:  "1h",
                 HistoryStep:    "5s",
                 StreamInterval: "2s",
@@ -267,7 +267,7 @@ func TestHostMetrics(t *testing.T) {
 func TestBasePath(t *testing.T) {
         store := state.New(720)
         cfg := config.Default()
-        h := NewHandler("/ui", "dev", "v0.5.4", cfg, store, nil, BufferConfig{}, nil)
+        h := NewHandler("/ui", "dev", "v0.5.4", cfg, store, nil, nil, BufferConfig{}, nil)
         rec := httptest.NewRecorder()
         req := httptest.NewRequest(http.MethodGet, "/ui/api/v1/healthz", nil)
         h.ServeHTTP(rec, req)

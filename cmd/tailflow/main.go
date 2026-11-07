@@ -170,7 +170,7 @@ func cmdServe(args []string) error {
                 }
         }()
 
-        handler := api.NewHandler(cfg.BasePath, version, tailkitVersion, cfg, store, hub, bufferCfg, http.FS(web.DistFS()))
+        handler := api.NewHandler(cfg.BasePath, version, tailkitVersion, cfg, store, hub, col, bufferCfg, http.FS(web.DistFS()))
 
         // Health listener: always loopback, even in tailnet mode, so the
         // container health check can reach it without going over the tailnet

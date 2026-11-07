@@ -14,6 +14,7 @@ import (
         "strings"
         "time"
 
+        "github.com/wf-pro-dev/tailflow/internal/collector"
         "github.com/wf-pro-dev/tailflow/internal/config"
         hubpkg "github.com/wf-pro-dev/tailflow/internal/hub"
         "github.com/wf-pro-dev/tailflow/internal/state"
@@ -32,6 +33,7 @@ type Handler struct {
         cfg      config.Config
         store    *state.Store
         hub      *hubpkg.Hub
+        coll     *collector.Collector
         bufferCfg BufferConfig
         // spaFS is the embed.FS for the SPA. nil until M2; when set, unknown
         // non-API paths fall back to index.html.
@@ -49,7 +51,7 @@ type BufferConfig struct {
 
 // NewHandler returns a Handler. basepath must start with "/" and end without
 // one (e.g. "/", "/ui"); trailing slashes are stripped.
-func NewHandler(basepath, version, tailkitVersion string, cfg config.Config, store *state.Store, hub *hubpkg.Hub, bufferCfg BufferConfig, spaFS http.FileSystem) *Handler {
+func NewHandler(basepath, version, tailkitVersion string, cfg config.Config, store *state.Store, hub *hubpkg.Hub, coll *collector.Collector, bufferCfg BufferConfig, spaFS http.FileSystem) *Handler {
         if !strings.HasPrefix(basepath, "/") {
                 basepath = "/" + basepath
         }
@@ -65,6 +67,7 @@ func NewHandler(basepath, version, tailkitVersion string, cfg config.Config, sto
                 cfg:            cfg,
                 store:          store,
                 hub:            hub,
+                coll:           coll,
                 bufferCfg:      bufferCfg,
                 spaFS:          spaFS,
         }
@@ -141,6 +144,8 @@ func (h *Handler) routeHostPath(w http.ResponseWriter, r *http.Request, path str
                 h.handleHostPorts(w, r)
         case sub == "docker/containers" && r.Method == http.MethodGet:
                 h.handleHostContainers(w, r)
+        case strings.HasPrefix(sub, "docker/containers/") && r.Method == http.MethodGet:
+                h.routeContainerPath(w, r, host, strings.TrimPrefix(sub, "docker/containers/"))
         case sub == "docker/swarm/services" && r.Method == http.MethodGet:
                 h.handleHostSwarmServices(w, r)
         case sub == "docker/compose/projects" && r.Method == http.MethodGet:

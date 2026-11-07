@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useHostContainers, useHostSwarmServices, useHostComposeProjects } from "@/lib/api/hooks";
+import { ContainerDrawer } from "./ContainerDrawer";
 
 type SubTab = "containers" | "swarm" | "compose";
 
 export function DockerTab({ host }: { host: string }) {
   const [sub, setSub] = useState<SubTab>("containers");
+  const [selectedContainer, setSelectedContainer] = useState<string | null>(null);
 
   return (
     <div className="space-y-4">
@@ -19,14 +21,23 @@ export function DockerTab({ host }: { host: string }) {
           </button>
         ))}
       </div>
-      {sub === "containers" && <ContainersTable host={host} />}
+      {sub === "containers" && (
+        <ContainersTable host={host} onSelect={setSelectedContainer} />
+      )}
       {sub === "swarm" && <SwarmTable host={host} />}
       {sub === "compose" && <ComposeTable host={host} />}
+      {selectedContainer && (
+        <ContainerDrawer
+          host={host}
+          containerID={selectedContainer}
+          onClose={() => setSelectedContainer(null)}
+        />
+      )}
     </div>
   );
 }
 
-function ContainersTable({ host }: { host: string }) {
+function ContainersTable({ host, onSelect }: { host: string; onSelect: (id: string) => void }) {
   const { data, isLoading, error } = useHostContainers(host);
   if (isLoading) return <div className="text-gray-500">Loading containers…</div>;
   if (error) {
@@ -53,7 +64,11 @@ function ContainersTable({ host }: { host: string }) {
         </thead>
         <tbody>
           {data.containers.map((c) => (
-            <tr key={c.id} className="border-b border-gray-100 dark:border-gray-900">
+            <tr
+              key={c.id}
+              onClick={() => onSelect(c.id)}
+              className="cursor-pointer border-b border-gray-100 hover:bg-blue-50 dark:border-gray-900 dark:hover:bg-gray-800/50"
+            >
               <td className="py-2 pr-4">
                 <StateChip state={c.state} />
               </td>

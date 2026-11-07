@@ -4,6 +4,7 @@ import { useEventStream } from "@/lib/stream/useEventStream";
 import { HostTable } from "./HostTable";
 import { FleetSummaryCards } from "./FleetSummaryCards";
 import { Filters } from "./Filters";
+import { StreamBanner } from "@/components/StreamBanner";
 
 export function FleetOverview() {
   const [filters, setFilters] = useState<{ q?: string; status?: string; sort?: string }>({});
@@ -11,10 +12,11 @@ export function FleetOverview() {
   const summaryQuery = useFleetSummary();
 
   // Subscribe to host.updated and host.removed events.
-  useEventStream(["hosts"]);
+  const { status } = useEventStream(["hosts"]);
 
   return (
     <div className="space-y-6">
+      <StreamBanner status={status} />
       <FleetSummaryCards summary={summaryQuery.data} isLoading={summaryQuery.isLoading} />
       <div className="card">
         <Filters filters={filters} onChange={setFilters} />
