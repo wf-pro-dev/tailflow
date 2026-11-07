@@ -8,16 +8,19 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true,
     "skipLibCheck": true,
     "isolatedModules": true,
     "moduleDetection": "force",
-    "verbatimModuleSyntax": true,
+    "verbatimModuleSyntax": false,
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "allowImportingTsExtensions": false,
     "noEmit": true,
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
   },
   "include": ["src"]
 }

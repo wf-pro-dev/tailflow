@@ -10,12 +10,12 @@ package api
 
 import (
         "encoding/json"
-        "io"
         "net/http"
         "strings"
         "time"
 
         "github.com/wf-pro-dev/tailflow/internal/config"
+        hubpkg "github.com/wf-pro-dev/tailflow/internal/hub"
         "github.com/wf-pro-dev/tailflow/internal/state"
 )
 
@@ -31,6 +31,7 @@ type Handler struct {
         tailkitVersion string
         cfg      config.Config
         store    *state.Store
+        hub      *hubpkg.Hub
         bufferCfg BufferConfig
         // spaFS is the embed.FS for the SPA. nil until M2; when set, unknown
         // non-API paths fall back to index.html.
@@ -48,7 +49,7 @@ type BufferConfig struct {
 
 // NewHandler returns a Handler. basepath must start with "/" and end without
 // one (e.g. "/", "/ui"); trailing slashes are stripped.
-func NewHandler(basepath, version, tailkitVersion string, cfg config.Config, store *state.Store, bufferCfg BufferConfig, spaFS http.FileSystem) *Handler {
+func NewHandler(basepath, version, tailkitVersion string, cfg config.Config, store *state.Store, hub *hubpkg.Hub, bufferCfg BufferConfig, spaFS http.FileSystem) *Handler {
         if !strings.HasPrefix(basepath, "/") {
                 basepath = "/" + basepath
         }
@@ -63,6 +64,7 @@ func NewHandler(basepath, version, tailkitVersion string, cfg config.Config, sto
                 tailkitVersion: tailkitVersion,
                 cfg:            cfg,
                 store:          store,
+                hub:            hub,
                 bufferCfg:      bufferCfg,
                 spaFS:          spaFS,
         }
@@ -91,6 +93,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
                 return
         case path == "/api/v1/hosts":
                 h.handleListHosts(w, r)
+                return
+        case path == "/api/v1/stream":
+                h.handleStream(w, r)
                 return
         case isHostPath(path):
                 h.routeHostPath(w, r, path)
@@ -130,6 +135,16 @@ func (h *Handler) routeHostPath(w http.ResponseWriter, r *http.Request, path str
                 h.handleHostMetrics(w, r)
         case sub == "metrics/latest" && r.Method == http.MethodGet:
                 h.handleHostMetricsLatest(w, r)
+        case sub == "processes" && r.Method == http.MethodGet:
+                h.handleHostProcesses(w, r)
+        case sub == "ports" && r.Method == http.MethodGet:
+                h.handleHostPorts(w, r)
+        case sub == "docker/containers" && r.Method == http.MethodGet:
+                h.handleHostContainers(w, r)
+        case sub == "docker/swarm/services" && r.Method == http.MethodGet:
+                h.handleHostSwarmServices(w, r)
+        case sub == "docker/compose/projects" && r.Method == http.MethodGet:
+                h.handleHostComposeProjects(w, r)
         default:
                 h.writeProblem(w, r, http.StatusNotFound, "not-found",
                         "Not found", "no such endpoint: "+path, host)
@@ -157,20 +172,26 @@ func (h *Handler) handleMeta(w http.ResponseWriter, r *http.Request) {
         _ = json.NewEncoder(w).Encode(resp)
 }
 
-// spaFallback serves the SPA index.html for any non-API path. In M0 there is
-// no SPA yet, so we serve a tiny placeholder so `make dev` shows something.
+// spaFallback serves the SPA. For any non-API path, it tries the exact file
+// first, then falls back to index.html (for client-side routing). When no SPA
+// is embedded, serves a placeholder.
 func (h *Handler) spaFallback(w http.ResponseWriter, r *http.Request, path string) {
         if h.spaFS != nil {
-                // Try the exact path first, then fall back to index.html.
+                // Try the exact path first.
                 if f, err := h.spaFS.Open(path); err == nil {
-                        defer f.Close()
                         stat, _ := f.Stat()
-                        http.ServeContent(w, r, path, stat.ModTime(), f.(io.ReadSeeker))
-                        return
+                        if !stat.IsDir() {
+                                defer f.Close()
+                                http.ServeContent(w, r, path, stat.ModTime(), readSeeker{f})
+                                return
+                        }
+                        f.Close()
                 }
+                // Fall back to index.html for client-side routing.
                 if f, err := h.spaFS.Open("/index.html"); err == nil {
                         defer f.Close()
-                        http.ServeContent(w, r, "index.html", time.Now(), f.(io.ReadSeeker))
+                        stat, _ := f.Stat()
+                        http.ServeContent(w, r, "index.html", stat.ModTime(), readSeeker{f})
                         return
                 }
         }
@@ -178,6 +199,14 @@ func (h *Handler) spaFallback(w http.ResponseWriter, r *http.Request, path strin
         w.Header().Set("Cache-Control", "no-store")
         _, _ = w.Write([]byte(m0PlaceholderHTML))
 }
+
+// readSeeker adapts an http.File (which implements ReadSeeker via io.ReadSeekCloser)
+// for use with http.ServeContent. The type assertion is safe because
+// http.File embeds io.ReadSeekCloser.
+type readSeeker struct{ f http.File }
+
+func (rs readSeeker) Read(p []byte) (int, error)         { return rs.f.Read(p) }
+func (rs readSeeker) Seek(off int64, whence int) (int64, error) { return rs.f.Seek(off, whence) }
 
 const m0PlaceholderHTML = `<!DOCTYPE html>
 <html lang="en">

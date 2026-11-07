@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --status-healthy: #16a34a;
+    --status-degraded: #d97706;
+    --status-stale: #65a30d;
+    --status-offline: #6b7280;
+    --status-noagent: #9333ea;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+@layer components {
+  .status-dot {
+    @apply inline-block h-2.5 w-2.5 rounded-full;
+  }
+  .status-healthy { background-color: var(--status-healthy); }
+  .status-degraded { background-color: var(--status-degraded); }
+  .status-stale { background-color: var(--status-stale); }
+  .status-offline { background-color: var(--status-offline); }
+  .status-noagent { background-color: var(--status-noagent); }
+
+  .card {
+    @apply rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900;
+  }
+
+  .btn {
+    @apply inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700;
+  }
+
+  .input {
+    @apply rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100;
+  }
+}

@@ -34,6 +34,7 @@ import (
         "github.com/wf-pro-dev/tailflow/internal/source"
         "github.com/wf-pro-dev/tailflow/internal/source/fakesource"
         "github.com/wf-pro-dev/tailflow/internal/state"
+        "github.com/wf-pro-dev/tailflow/web"
 )
 
 // hubAdapter bridges state.HubPublisher to hub.Hub. We need this because
@@ -169,7 +170,7 @@ func cmdServe(args []string) error {
                 }
         }()
 
-        handler := api.NewHandler(cfg.BasePath, version, tailkitVersion, cfg, store, bufferCfg, nil)
+        handler := api.NewHandler(cfg.BasePath, version, tailkitVersion, cfg, store, hub, bufferCfg, http.FS(web.DistFS()))
 
         // Health listener: always loopback, even in tailnet mode, so the
         // container health check can reach it without going over the tailnet
