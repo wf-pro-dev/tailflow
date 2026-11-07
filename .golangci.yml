@@ -3,7 +3,7 @@
 
 run:
   timeout: 5m
-  go: "1.23"
+  go: "1.26"
 
 linters:
   enable:
@@ -31,8 +31,10 @@ linters-settings:
     local-prefixes: github.com/wf-pro-dev/tailflow
   depguard:
     # Enforces design §F10: only internal/source/tailkitsrc and cmd/tailflow
-    # may import the root tailkit package; internal/source and internal/collector
-    # may import tailkit/client; state, hub, and api import neither.
+    # may import the root tailkit package; internal/source, internal/collector,
+    # and internal/hub may import tailkit/client (hub uses client.Event[T] and
+    # the shared event-name constants so its SSE wire format matches tailkitd's
+    # exactly — see internal/hub/sse.go). State and api import neither.
     rules:
       tailkit-root:
         deny:
@@ -41,7 +43,7 @@ linters-settings:
       tailkit-client:
         deny:
           - pkg: github.com/wf-pro-dev/tailkit/client
-            desc: "Only internal/source, internal/source/tailkitsrc, and internal/collector may import tailkit/client. State, hub, and api must use Tailflow's own types."
+            desc: "Only internal/source, internal/source/tailkitsrc, internal/collector, and internal/hub may import tailkit/client. State and api must use Tailflow's own types."
   gocritic:
     enabled-tags:
       - diagnostic
