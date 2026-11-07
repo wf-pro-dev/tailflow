@@ -20,36 +20,39 @@ import "time"
 // responsibility — the supervisor only increments the counter on actual
 // failures and resets it after streamInterval*30 of healthy streaming (§F2).
 func DeriveStatus(online, agentReachable bool, lastSampleAt *time.Time, now time.Time, streamInterval time.Duration, staleFactor int, failures, degradeThreshold int) Status {
-	switch {
-	case !online:
-		return StatusOffline
-	case !agentReachable:
-		return StatusNoAgent
-	case lastSampleAt == nil:
-		// Never sampled yet — treat as no-agent (we have no freshness signal).
-		// The collector will overwrite this with healthy on the first sample.
-		return StatusNoAgent
-	case isStale(lastSampleAt, now, streamInterval, staleFactor):
-		return StatusStale
-	case failures >= degradeThreshold:
-		return StatusDegraded
-	default:
-		return StatusHealthy
-	}
+        switch {
+        case !online:
+                return StatusOffline
+        case !agentReachable:
+                return StatusNoAgent
+        case lastSampleAt == nil:
+                // Agent is reachable but no sample has arrived yet. Treat as healthy
+                // (not no-agent) — the metrics loop is starting and the first sample
+                // will arrive within a few seconds. Returning no-agent here would
+                // make the metrics endpoint return 503, creating a chicken-and-egg
+                // problem where no samples can ever arrive.
+                return StatusHealthy
+        case isStale(lastSampleAt, now, streamInterval, staleFactor):
+                return StatusStale
+        case failures >= degradeThreshold:
+                return StatusDegraded
+        default:
+                return StatusHealthy
+        }
 }
 
 // isStale returns true if the last sample is older than staleFactor ×
 // streamInterval (design §5.2). With defaults (factor 3, interval 2s) that's
 // 6s — matching README gap #4 / design D2.
 func isStale(lastSampleAt *time.Time, now time.Time, streamInterval time.Duration, staleFactor int) bool {
-	if staleFactor < 1 {
-		staleFactor = 3
-	}
-	if streamInterval <= 0 {
-		streamInterval = 2 * time.Second
-	}
-	threshold := time.Duration(staleFactor) * streamInterval
-	return now.Sub(*lastSampleAt) > threshold
+        if staleFactor < 1 {
+                staleFactor = 3
+        }
+        if streamInterval <= 0 {
+                streamInterval = 2 * time.Second
+        }
+        threshold := time.Duration(staleFactor) * streamInterval
+        return now.Sub(*lastSampleAt) > threshold
 }
 
 // IsReachableAgent reports whether the host's tailkitd peer is online. This
@@ -57,11 +60,11 @@ func isStale(lastSampleAt *time.Time, now time.Time, streamInterval time.Duratio
 // the state package doesn't depend on tailkit types. The collector calls
 // this with the values it pulled from client.Host.
 func IsReachableAgent(online bool, tailkitdPeerOnline *bool) bool {
-	if !online {
-		return false
-	}
-	if tailkitdPeerOnline == nil {
-		return false
-	}
-	return *tailkitdPeerOnline
+        if !online {
+                return false
+        }
+        if tailkitdPeerOnline == nil {
+                return false
+        }
+        return *tailkitdPeerOnline
 }

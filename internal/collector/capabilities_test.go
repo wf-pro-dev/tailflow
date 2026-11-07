@@ -35,8 +35,8 @@ func testCollector(t *testing.T, b *fakesource.Backend) (*Collector, *state.Stor
 func TestF6_03_DockerUnavailableSetsNotConfigured(t *testing.T) {
         b := &fakesource.Backend{Script: fakesource.NewScript()}
         // Metrics: available (Ports returns OK).
-        b.Script.Add("vps-1", "GET", "/integrations/metrics/ports", fakesource.Response{
-                JSON: []client.Port{},
+        b.Script.Add("vps-1", "GET", "/integrations/metrics/cpu", fakesource.Response{
+                JSON: &client.CPU{},
         })
         // Docker config: 503 "docker not configured" → ErrDockerUnavailable.
         b.Script.Add("vps-1", "GET", "/integrations/docker/config", fakesource.Response{
@@ -65,7 +65,7 @@ func TestF6_03_DockerUnavailableSetsNotConfigured(t *testing.T) {
 func TestF9_01_OldAgent404MetricsCapabilityAbsent(t *testing.T) {
         b := &fakesource.Backend{Script: fakesource.NewScript()}
         // Metrics: 404 (old agent without metrics.toml) → ErrMetricsUnavailable.
-        b.Script.Add("vps-1", "GET", "/integrations/metrics/ports", fakesource.Response{
+        b.Script.Add("vps-1", "GET", "/integrations/metrics/cpu", fakesource.Response{
                 Status:    404,
                 ErrorBody: `{"error":"not found"}`,
         })
@@ -104,8 +104,8 @@ func TestF9_01_OldAgent404MetricsCapabilityAbsent(t *testing.T) {
 func TestF9_02_PermissionDeniedSetsReason(t *testing.T) {
         b := &fakesource.Backend{Script: fakesource.NewScript()}
         // Metrics: available.
-        b.Script.Add("vps-1", "GET", "/integrations/metrics/ports", fakesource.Response{
-                JSON: []client.Port{},
+        b.Script.Add("vps-1", "GET", "/integrations/metrics/cpu", fakesource.Response{
+                JSON: &client.CPU{},
         })
         // Docker config: 403 "forbidden" → ErrPermissionDenied.
         b.Script.Add("vps-1", "GET", "/integrations/docker/config", fakesource.Response{
@@ -130,8 +130,8 @@ func TestF9_02_PermissionDeniedSetsReason(t *testing.T) {
 // returns Enabled=true with Swarm and Compose enabled.
 func TestCapabilityProbeDockerEnabled(t *testing.T) {
         b := &fakesource.Backend{Script: fakesource.NewScript()}
-        b.Script.Add("vps-1", "GET", "/integrations/metrics/ports", fakesource.Response{
-                JSON: []client.Port{},
+        b.Script.Add("vps-1", "GET", "/integrations/metrics/cpu", fakesource.Response{
+                JSON: &client.CPU{},
         })
         // Docker config: fully enabled.
         b.Script.Add("vps-1", "GET", "/integrations/docker/config", fakesource.Response{
@@ -171,8 +171,8 @@ func TestCapabilityProbeDockerEnabled(t *testing.T) {
 // "not-configured".
 func TestCapabilityProbeSwarmDisabled(t *testing.T) {
         b := &fakesource.Backend{Script: fakesource.NewScript()}
-        b.Script.Add("vps-1", "GET", "/integrations/metrics/ports", fakesource.Response{
-                JSON: []client.Port{},
+        b.Script.Add("vps-1", "GET", "/integrations/metrics/cpu", fakesource.Response{
+                JSON: &client.CPU{},
         })
         b.Script.Add("vps-1", "GET", "/integrations/docker/config", fakesource.Response{
                 JSON: map[string]any{
@@ -212,8 +212,8 @@ func TestCapabilityProbeSwarmDisabled(t *testing.T) {
 func TestCapabilityProbeTransientErrorLeavesPrevious(t *testing.T) {
         b := &fakesource.Backend{Script: fakesource.NewScript()}
         // Metrics: available.
-        b.Script.Add("vps-1", "GET", "/integrations/metrics/ports", fakesource.Response{
-                JSON: []client.Port{},
+        b.Script.Add("vps-1", "GET", "/integrations/metrics/cpu", fakesource.Response{
+                JSON: &client.CPU{},
         })
         // Docker: available.
         b.Script.Add("vps-1", "GET", "/integrations/docker/config", fakesource.Response{

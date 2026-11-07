@@ -61,7 +61,7 @@ func TestF1_01_NewHostAppears(t *testing.T) {
         fleet.SetHosts([]client.Host{newHost})
         // Add a script entry for the host's capability probe (Ports() returns
         // ErrMetricsUnavailable so the host has no metrics capability).
-        b.Script.Add("vps-1", "GET", "/integrations/metrics/ports", fakesource.Response{
+        b.Script.Add("vps-1", "GET", "/integrations/metrics/cpu", fakesource.Response{
                 Status:    503,
                 ErrorBody: `{"error":"metrics not configured"}`,
         })
@@ -91,7 +91,7 @@ func TestF1_02_HostDisappears(t *testing.T) {
 
         host := client.Host{Name: "vps-1", Online: true}
         b := &fakesource.Backend{Script: fakesource.NewScript()}
-        b.Script.Add("vps-1", "GET", "/integrations/metrics/ports", fakesource.Response{
+        b.Script.Add("vps-1", "GET", "/integrations/metrics/cpu", fakesource.Response{
                 Status: 503, ErrorBody: `{"error":"metrics not configured"}`,
         })
         b.Script.Add("vps-1", "GET", "/docker/config", fakesource.Response{
@@ -130,7 +130,7 @@ func TestF1_03_UnchangedListNoEvents(t *testing.T) {
 
         host := client.Host{Name: "vps-1", Online: true}
         b := &fakesource.Backend{Script: fakesource.NewScript()}
-        b.Script.Add("vps-1", "GET", "/integrations/metrics/ports", fakesource.Response{Status: 503, ErrorBody: `{"error":"metrics not configured"}`})
+        b.Script.Add("vps-1", "GET", "/integrations/metrics/cpu", fakesource.Response{Status: 503, ErrorBody: `{"error":"metrics not configured"}`})
         b.Script.Add("vps-1", "GET", "/docker/config", fakesource.Response{Status: 503, ErrorBody: `{"error":"docker not configured"}`})
         fleet := fakesource.NewFleet([]client.Host{host}, b)
 

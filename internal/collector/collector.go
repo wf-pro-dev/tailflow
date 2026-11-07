@@ -224,6 +224,12 @@ func mapHost(h client.Host, streamInterval time.Duration) state.Host {
         if len(dnsName) > 0 && dnsName[len(dnsName)-1] == '.' {
                 dnsName = dnsName[:len(dnsName)-1]
         }
+        // AgentOnline: true iff the tailkitd sidecar peer is online. This is the
+        // same check tailkit's hostReachable uses (peers.go:236).
+        agentOnline := false
+        if h.Tailkitd != nil && h.Tailkitd.Peer != nil {
+                agentOnline = h.Tailkitd.Peer.Online
+        }
         return state.Host{
                 Name:           h.Name,
                 Role:           h.Role,
@@ -233,6 +239,7 @@ func mapHost(h client.Host, streamInterval time.Duration) state.Host {
                 DNSName:        dnsName,
                 OS:             h.OS,
                 Online:         h.Online,
+                AgentOnline:    agentOnline,
                 StreamInterval: streamInterval,
         }
 }

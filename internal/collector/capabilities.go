@@ -54,10 +54,13 @@ func (c *Collector) probeCapabilities(ctx context.Context, scope client.HostScop
         callCtx, cancel := context.WithTimeout(ctx, c.cfg.CallTimeout)
         defer cancel()
 
-        // Metrics: probe via Ports() which returns ErrMetricsUnavailable when
-        // metrics.toml is missing. (The singular MetricsScope has no Config()
-        // method — only the fleet scope does.)
-        _, err := scope.Metrics().Ports(callCtx)
+        // Metrics: probe via CPU() which returns ErrMetricsUnavailable when
+        // metrics.toml is missing. We previously used Ports(), but the tailkitd
+        // installer's skeleton metrics.toml omits the [ports] section (gap #5),
+        // so Ports() returns 503 on freshly-installed nodes even though the
+        // metrics All stream works fine. CPU() is a core metrics feature that's
+        // always enabled when metrics.toml exists.
+        _, err := scope.Metrics().CPU(callCtx)
         switch {
         case err == nil:
                 caps.Metrics = true
