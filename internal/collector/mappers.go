@@ -98,6 +98,16 @@ func imageFromSpec(s client.SwarwService) string {
         return s.Spec.TaskTemplate.ContainerSpec.Image
 }
 
+// fetchDockerConfig fetches /integrations/docker/config directly via
+// Backend.Do, working around the SDK bug (gap #4) where Docker().Config()
+// hits /docker/config (wrong path — the daemon exposes
+// /integrations/docker/config). Returns the parsed DockerConfig.
+func fetchDockerConfig(ctx context.Context, scope client.HostScope) (integrations.DockerConfig, error) {
+        var cfg integrations.DockerConfig
+        err := scope.Backend.Do(ctx, scope.Hostname, "GET", "/integrations/docker/config", nil, &cfg)
+        return cfg, err
+}
+
 // listComposeProjects fetches /integrations/docker/compose/projects directly
 // via Backend.Do, working around the SDK bug (gap #3) where
 // Compose().Services() hits /compose/Services (capital S, doesn't exist).
