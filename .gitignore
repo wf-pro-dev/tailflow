@@ -1,43 +1,33 @@
-# Binaries
+# Build artifacts
 /bin/
-/tailflow
 /dist/
-/build/
-/out/
-*.exe
-*.dll
-*.so
-*.dylib
-*.test
+/web/dist/
+/web/node_modules/
 
-# Go
-coverage.out
-*.coverprofile
-vendor/
+# Go workspace files (we use a single module, not a workspace)
+/go.work
+/go.work.sum
 
-# Local databases
-*.db
-*.db-*
-*.sqlite
-*.sqlite3
-*.wal
-*.shm
-
-# Environment and secrets
+# Local environment overrides
 .env
-.env.*
-!.env.example
+.env.local
+.env.*.local
 
-/tailflow-probe
-
-# Logs and temp files
-*.log
-tmp/
-.tmp/
-
-# IDEs and OS files
-.DS_Store
-.idea/
+# Editor / OS
 .vscode/
+.idea/
 *.swp
-*.swo
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+coverage.out
+coverage.txt
+*.test
+*.prof
+
+# Logs
+*.log
+
+# tsnet state (do not commit tailnet credentials or state)
+/tsnet-state/

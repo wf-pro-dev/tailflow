@@ -1,0 +1,79 @@
+{
+  "host": {
+    "hostname": "vps-1",
+    "uptime": 3661,
+    "boot_time": 1762507000,
+    "procs": 142,
+    "os": "linux",
+    "platform": "ubuntu",
+    "platform_family": "debian",
+    "platform_version": "24.04",
+    "kernel_version": "6.8.0-45-generic",
+    "kernel_arch": "x86_64",
+    "host_id": "abc123def456"
+  },
+  "cpu": {
+    "info": [
+      {"cpu": 0, "vendor_id": "GenuineIntel", "family": "6", "model": "142", "stepping": 12, "physical_id": "0", "core_id": "0", "cores": 2, "model_name": "Intel(R) Xeon(R) CPU", "mhz": 2299.998, "cache_size": 4096, "flags": ["lm", "sse", "sse2"], "microcode": ""}
+    ],
+    "percent_per_cpu": [12.4, 14.1],
+    "percent_total": 13.25
+  },
+  "memory": {
+    "virtual": {
+      "total": 8363909120,
+      "available": 4918924800,
+      "used": 3444984320,
+      "used_percent": 41.18,
+      "free": 4918924800,
+      "active": 2000000000,
+      "inactive": 1500000000,
+      "wired": 0,
+      "laundry": 0,
+      "buffers": 200000000,
+      "cached": 800000000,
+      "write_back": 0,
+      "dirty": 0,
+      "write_back_tmp": 0,
+      "shared": 50000000,
+      "slab": 300000000
+    },
+    "swap": {
+      "total": 4294967296,
+      "used": 0,
+      "free": 4294967296,
+      "used_percent": 0,
+      "sin": 0,
+      "sout": 0,
+      "pgsin": 0,
+      "pgsout": 0
+    }
+  },
+  "disk": [
+    {
+      "path": "/",
+      "fstype": "ext4",
+      "total": 42158178304,
+      "free": 31131156480,
+      "used": 9287823360,
+      "used_percent": 22.99,
+      "inodes_total": 2621440,
+      "inodes_used": 110000,
+      "inodes_free": 2511440,
+      "inodes_used_percent": 4.19
+    }
+  ],
+  "network": [
+    {"name": "eth0", "bytes_sent": 123456789, "bytes_recv": 987654321, "packets_sent": 1234567, "packets_recv": 9876543, "errin": 0, "errout": 0, "dropin": 0, "dropout": 0, "fifoin": 0, "fifoout": 0}
+  ],
+  "processes": [
+    {"pid": 1, "name": "systemd", "status": "sleeping", "cpu_percent": 0.0, "memory_rss_bytes": 12345678, "cmdline": "/sbin/init"},
+    {"pid": 1234, "name": "nginx", "status": "running", "cpu_percent": 4.2, "memory_rss_bytes": 8765432, "cmdline": "nginx: worker process"},
+    {"pid": 5678, "name": "node", "status": "running", "cpu_percent": 8.1, "memory_rss_bytes": 234567890, "cmdline": "node /srv/app/server.js"}
+  ],
+  "ports": [
+    {"addr": "0.0.0.0", "port": 22, "proto": "tcp", "pid": 1000, "process": "sshd"},
+    {"addr": "0.0.0.0", "port": 443, "proto": "tcp6", "pid": 1234, "process": "nginx"},
+    {"addr": "127.0.0.1", "port": 3000, "proto": "tcp", "pid": 5678, "process": "node"}
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "host": {"enabled": true},
+  "cpu": {"enabled": true},
+  "memory": {"enabled": true},
+  "disk": {"enabled": true, "paths": []},
+  "network": {"enabled": true, "interfaces": []},
+  "processes": {"enabled": true, "limit": 20},
+  "ports": {"enabled": true}
+}

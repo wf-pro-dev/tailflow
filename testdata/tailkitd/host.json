@@ -1,0 +1,32 @@
+{
+  "name": "vps-1",
+  "role": "web",
+  "environment": "prod",
+  "provider": "hetzner",
+  "instance_type": "cpx31",
+  "tags": ["edge"],
+  "metadata": {},
+  "peer": {
+    "id": "nodekey:abcdef0123456789",
+    "online": true,
+    "last_seen": "2026-11-07T10:15:00Z",
+    "hostname": "vps-1"
+  },
+  "tailkitd": {
+    "host_name": "vps-1",
+    "peer": {
+      "id": "nodekey:fedcba9876543210",
+      "online": true,
+      "last_seen": "2026-11-07T10:15:30Z",
+      "hostname": "tailkitd-vps-1"
+    },
+    "services": []
+  },
+  "ts_hostname": "vps-1",
+  "ts_dns_name": "vps-1.tailnet-name.ts.net.",
+  "ts_ips": ["100.64.0.5"],
+  "os": "linux",
+  "arch": "amd64",
+  "online": true,
+  "is_admin": false
+}

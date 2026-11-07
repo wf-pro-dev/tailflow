@@ -1,0 +1,973 @@
+openapi: 3.1.0
+info:
+  title: Tailflow API
+  version: 1.0.0
+  summary: Read-only fleet dashboard API for tailkitd
+  description: |
+    Tailflow is a stateless, ephemeral aggregator that gives an operator a live,
+    read-only view of every machine on a Tailscale tailnet that runs tailkitd.
+
+    All endpoints are read-only (GET / HEAD / OPTIONS only); other methods
+    receive HTTP 405. Errors use `application/problem+json` (RFC 9457) with the
+    shape `{type, title, status, detail, host?, request_id}`. The `type` field
+    is a URI suffix that identifies the error class (see the `Problem` schema).
+
+    The API is additive within v1; breaking changes require `/api/v2`.
+  license:
+    name: MIT
+    url: https://github.com/wf-pro-dev/tailflow/blob/main/LICENSE
+  contact:
+    name: Tailflow
+    url: https://github.com/wf-pro-dev/tailflow/issues
+
+servers:
+  - url: /
+    description: Same-origin (the SPA is served from the same handler)
+
+tags:
+  - name: meta
+    description: Process and fleet-level metadata
+  - name: hosts
+    description: Host discovery and per-host detail
+  - name: metrics
+    description: Time-series metrics
+  - name: processes
+    description: Top processes by CPU or memory
+  - name: ports
+    description: Listening sockets
+  - name: docker
+    description: Docker containers, Swarm services, and Compose projects
+  - name: stream
+    description: Server-Sent Events fan-out
+
+components:
+  securitySchemes:
+    tailnetAuth:
+      type: http
+      scheme: bearer
+      description: |
+        Tailscale tailnet identity, established by tailkit.AuthMiddleware.
+        In standalone mode the listener is on tsnet; in embedded mode (future)
+        the daemon's existing middleware applies. There is no API token —
+        authentication is mutual-TLS via Tailscale.
+
+  parameters:
+    HostPathParam:
+      name: host
+      in: path
+      required: true
+      description: Hostname of the target tailnet machine.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 253
+      example: vps-1
+    ContainerIdPathParam:
+      name: id
+      in: path
+      required: true
+      description: Docker container ID (12-64 hex characters).
+      schema:
+        type: string
+        pattern: '^[a-f0-9]{12,64}$'
+      example: a1b2c3d4e5f6
+
+  schemas:
+    Problem:
+      description: RFC 9457 problem document.
+      type: object
+      required: [type, title, status, detail]
+      properties:
+        type:
+          type: string
+          description: Suffix of the error type URI (e.g. `host-not-found`).
+        title:
+          type: string
+          description: Short human-readable summary.
+        status:
+          type: integer
+          description: HTTP status code echoed for client convenience.
+        detail:
+          type: string
+          description: Specific explanation of this occurrence.
+        host:
+          type: string
+          description: Hostname the request targeted, when applicable.
+        request_id:
+          type: string
+          description: Correlation ID, also sent as the `X-Request-Id` response header.
+      example:
+        type: host-unreachable
+        title: Host is unreachable
+        status: 503
+        detail: "tailkitd peer is offline; last seen 2m ago"
+        host: vps-1
+        request_id: req_01H8XK2P3Q4R5S6T7U8V9W
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          description: Always `ok`; liveness does not wait for discovery.
+
+    MetaResponse:
+      type: object
+      required: [version, tailkit_version, uptime_seconds, buffer_config]
+      properties:
+        version:
+          type: string
+          description: Tailflow build version (semver or `dev`).
+        tailkit_version:
+          type: string
+          description: Pinned tailkit dependency version.
+        uptime_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+        buffer_config:
+          $ref: '#/components/schemas/BufferConfig'
+
+    BufferConfig:
+      type: object
+      required: [history_window, history_step, stream_interval, stale_factor]
+      properties:
+        history_window:
+          type: string
+          description: Duration string (e.g. `1h`). Length of each metric ring buffer.
+        history_step:
+          type: string
+          description: Aggregation bucket width.
+        stream_interval:
+          type: string
+          description: Expected interval between upstream metric samples.
+        stale_factor:
+          type: integer
+          minimum: 1
+          description: A host is `stale` after this many missed stream intervals.
+
+    FleetSummary:
+      type: object
+      required: [counts, mean_cpu_pct, mean_mem_pct, containers_running]
+      properties:
+        counts:
+          type: object
+          description: Host count by status.
+          required: [healthy, degraded, stale, no_agent, offline]
+          properties:
+            healthy: {type: integer, minimum: 0}
+            degraded: {type: integer, minimum: 0}
+            stale: {type: integer, minimum: 0}
+            no_agent: {type: integer, minimum: 0}
+            offline: {type: integer, minimum: 0}
+        mean_cpu_pct:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 100
+          description: Fleet-wide mean CPU utilisation. `null` if no healthy hosts.
+          nullable: true
+        mean_mem_pct:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 100
+          description: Fleet-wide mean memory utilisation. `null` if no healthy hosts.
+          nullable: true
+        containers_running:
+          type: integer
+          minimum: 0
+          description: Total containers in `running` state across the fleet.
+
+    Status:
+      type: string
+      description: |
+        Derived host status (design §5.2).
+        - `offline`: `Host.Online == false`
+        - `no-agent`: Online, but tailkitd peer absent or offline
+        - `stale`: Agent reachable but last sample older than `stale_factor × stream_interval`
+        - `degraded`: N consecutive stream failures (default 3, with hysteresis)
+        - `healthy`: Otherwise
+      enum: [offline, no-agent, stale, degraded, healthy]
+
+    Capabilities:
+      type: object
+      required: [metrics, docker, swarm, compose]
+      properties:
+        metrics:
+          type: boolean
+        docker:
+          type: boolean
+        swarm:
+          type: boolean
+        compose:
+          type: boolean
+        reasons:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [not-configured, permission-denied, unavailable]
+          description: |
+            Map from capability name to the reason it is unavailable. Present
+            only for capabilities that are `false`. Values:
+            - `not-configured`: the integration's TOML is missing or disabled
+            - `permission-denied`: the operation is blocked by ACL or node config
+            - `unavailable`: the agent returned 404 or a typed unavailable error
+
+    Host:
+      type: object
+      required:
+        - name
+        - status
+        - online
+        - capabilities
+        - last_sample_at
+        - stream_interval_s
+      properties:
+        name: {type: string}
+        role: {type: string, description: Operator-assigned role.}
+        environment: {type: string}
+        tags:
+          type: array
+          items: {type: string}
+        ts_ips:
+          type: array
+          items: {type: string}
+        ts_dns_name:
+          type: string
+          description: MagicDNS name with trailing dot trimmed.
+        os:
+          type: string
+          description: Operating system (e.g. `linux`). Arch is not surfaced reliably today.
+        online: {type: boolean}
+        status: {$ref: '#/components/schemas/Status'}
+        capabilities: {$ref: '#/components/schemas/Capabilities'}
+        last_sample_at:
+          type: string
+          format: date-time
+          nullable: true
+        stream_interval_s:
+          type: integer
+          minimum: 1
+          description: Expected seconds between upstream metric samples (default 2 until U1 ships).
+        uptime_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+
+    HostList:
+      type: array
+      items: {$ref: '#/components/schemas/Host'}
+
+    MetricsResponse:
+      type: object
+      required: [host, window_s, step_s, t, series]
+      properties:
+        host: {type: string}
+        window_s:
+          type: integer
+          minimum: 1
+        step_s:
+          type: integer
+          minimum: 1
+        t:
+          type: array
+          description: Unix timestamps (seconds) for each bucket.
+          items: {type: integer, format: int64}
+        series:
+          type: object
+          required: [cpu_total, mem_used_pct, net_rx_bps, net_tx_bps]
+          properties:
+            cpu_total:
+              type: array
+              items: {type: number, nullable: true}
+            cpu_per_core:
+              type: array
+              description: Optional per-core CPU percentages.
+              items:
+                type: array
+                items: {type: number, nullable: true}
+            mem_used_pct:
+              type: array
+              items: {type: number, nullable: true}
+            swap_used_pct:
+              type: array
+              items: {type: number, nullable: true}
+            net_rx_bps:
+              type: array
+              items: {type: number, nullable: true}
+            net_tx_bps:
+              type: array
+              items: {type: number, nullable: true}
+            mem_used_bytes:
+              type: array
+              items: {type: integer, nullable: true}
+            mem_total_bytes:
+              type: array
+              items: {type: integer, nullable: true}
+
+    LatestMetrics:
+      type: object
+      required: [host, t]
+      properties:
+        host: {type: string}
+        t: {type: integer, format: int64}
+        cpu_total: {type: number, nullable: true}
+        mem_used_pct: {type: number, nullable: true}
+        mem_used_bytes: {type: integer, nullable: true}
+        mem_total_bytes: {type: integer, nullable: true}
+        net_rx_bps: {type: number, nullable: true}
+        net_tx_bps: {type: number, nullable: true}
+        disks:
+          type: array
+          items: {$ref: '#/components/schemas/DiskUsage'}
+        net_interfaces:
+          type: array
+          items: {$ref: '#/components/schemas/NetInterfaceCounters'}
+
+    DiskUsage:
+      type: object
+      required: [path, total, used, used_pct]
+      properties:
+        path: {type: string}
+        device: {type: string, nullable: true}
+        fstype: {type: string, nullable: true}
+        total: {type: integer, format: int64}
+        used: {type: integer, format: int64}
+        free: {type: integer, format: int64}
+        used_pct: {type: number}
+
+    NetInterfaceCounters:
+      type: object
+      required: [name, bytes_recv, bytes_sent, rx_bps, tx_bps]
+      properties:
+        name: {type: string}
+        bytes_recv: {type: integer, format: int64}
+        bytes_sent: {type: integer, format: int64}
+        rx_bps: {type: number}
+        tx_bps: {type: number}
+
+    Process:
+      type: object
+      required: [pid, name, status, cpu_percent, memory_rss_bytes]
+      properties:
+        pid: {type: integer, format: int32}
+        name: {type: string}
+        status: {type: string}
+        cpu_percent: {type: number}
+        memory_rss_bytes: {type: integer, format: int64}
+        cmdline: {type: string}
+
+    ProcessList:
+      type: object
+      required: [host, sort, truncated_to, processes]
+      properties:
+        host: {type: string}
+        sort:
+          type: string
+          enum: [cpu, mem]
+        truncated_to:
+          type: integer
+          minimum: 1
+          description: tailkitd-imposed limit (default 20, max 100, sorted by CPU).
+        processes:
+          type: array
+          items: {$ref: '#/components/schemas/Process'}
+
+    Port:
+      type: object
+      required: [addr, port, proto, pid]
+      properties:
+        addr: {type: string}
+        port: {type: integer, format: int32, minimum: 0, maximum: 65535}
+        proto:
+          type: string
+          enum: [tcp, tcp6, udp, udp6]
+        pid: {type: integer, format: int32}
+        process: {type: string}
+
+    PortList:
+      type: object
+      required: [host, ports]
+      properties:
+        host: {type: string}
+        ports:
+          type: array
+          items: {$ref: '#/components/schemas/Port'}
+
+    Container:
+      type: object
+      required: [id, name, image, state]
+      properties:
+        id:
+          type: string
+          description: Container ID (12-64 hex characters).
+        name: {type: string}
+        image: {type: string}
+        image_id: {type: string, nullable: true}
+        state:
+          type: string
+          enum: [created, running, paused, restarting, exited, dead]
+        status:
+          type: string
+          description: Human-readable status text from Docker (e.g. `Up 2 hours`).
+        health:
+          type: string
+          nullable: true
+        ports:
+          type: array
+          items:
+            type: object
+            properties:
+              ip: {type: string, nullable: true}
+              private: {type: integer}
+              public: {type: integer, nullable: true}
+              proto: {type: string}
+        created_at: {type: string, format: date-time}
+        command: {type: string, nullable: true}
+
+    ContainerList:
+      type: object
+      required: [host, containers]
+      properties:
+        host: {type: string}
+        containers:
+          type: array
+          items: {$ref: '#/components/schemas/Container'}
+
+    ContainerInspect:
+      allOf:
+        - $ref: '#/components/schemas/Container'
+        - type: object
+          properties:
+            labels:
+              type: object
+              additionalProperties: {type: string}
+            networks:
+              type: array
+              items:
+                type: object
+                properties:
+                  name: {type: string}
+                  ip: {type: string, nullable: true}
+            mounts:
+              type: array
+              items:
+                type: object
+                properties:
+                  type: {type: string}
+                  source: {type: string}
+                  destination: {type: string}
+                  mode: {type: string, nullable: true}
+                  rw: {type: boolean}
+
+    SwarmService:
+      type: object
+      required: [id, name, image]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        image: {type: string}
+        mode:
+          type: string
+          description: Replication mode (`replicated` or `global`).
+        replicas:
+          type: integer
+          nullable: true
+        ports:
+          type: array
+          items:
+            type: object
+            properties:
+              published: {type: integer, nullable: true}
+              target: {type: integer}
+              proto: {type: string}
+
+    SwarmServiceList:
+      type: object
+      required: [host, services]
+      properties:
+        host: {type: string}
+        services:
+          type: array
+          items: {$ref: '#/components/schemas/SwarmService'}
+
+    ComposeProject:
+      type: object
+      required: [name, status]
+      properties:
+        name: {type: string}
+        status:
+          type: string
+          description: Compose project status as reported by `docker compose ls`.
+        config_files: {type: string, nullable: true}
+
+    ComposeProjectList:
+      type: object
+      required: [host, projects]
+      properties:
+        host: {type: string}
+        projects:
+          type: array
+          items: {$ref: '#/components/schemas/ComposeProject'}
+
+  responses:
+    NotFound:
+      description: Host not found in the current discovered set.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    HostUnreachable:
+      description: Host is offline or its tailkitd agent is unreachable.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    CapabilityUnavailable:
+      description: |
+        The integration is not configured on the host (503 from tailkitd).
+        Map tailkit's `ErrDockerUnavailable` and `ErrMetricsUnavailable` here.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    PermissionDenied:
+      description: The operation is blocked by ACL or node config (403 from tailkitd).
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    UpstreamTimeout:
+      description: tailkitd call timed out.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    UpstreamError:
+      description: Generic upstream error.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    BadRequest:
+      description: Invalid query parameter.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    TooManyStreams:
+      description: SSE connection cap reached.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+
+paths:
+  /api/v1/healthz:
+    get:
+      tags: [meta]
+      operationId: getHealth
+      summary: Liveness probe
+      description: Returns 200 immediately on process start. Liveness does not wait for discovery.
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HealthResponse'}
+
+  /api/v1/meta:
+    get:
+      tags: [meta]
+      operationId: getMeta
+      summary: App version, tailkit version, uptime, buffer config
+      security: [{tailnetAuth: []}]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MetaResponse'}
+
+  /api/v1/fleet/summary:
+    get:
+      tags: [meta]
+      operationId: getFleetSummary
+      summary: Counts by status and fleet-wide CPU/memory means
+      security: [{tailnetAuth: []}]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FleetSummary'}
+
+  /api/v1/hosts:
+    get:
+      tags: [hosts]
+      operationId: listHosts
+      summary: List hosts
+      description: |
+        Returns every discovered host with its derived status, capabilities,
+        and the latest known vitals. The same data is updated live over
+        `host.updated` events on the SSE stream.
+      security: [{tailnetAuth: []}]
+      parameters:
+        - name: status
+          in: query
+          schema: {$ref: '#/components/schemas/Status'}
+        - name: role
+          in: query
+          schema: {type: string}
+        - name: environment
+          in: query
+          schema: {type: string}
+        - name: tag
+          in: query
+          schema: {type: string}
+        - name: q
+          in: query
+          description: Case-insensitive substring over name, DNS name, and tags.
+          schema: {type: string}
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [name, status, cpu, mem, net, containers, last_seen]
+            default: name
+        - name: order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: asc
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HostList'}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/v1/hosts/{host}:
+    get:
+      tags: [hosts]
+      operationId: getHost
+      summary: One host with status and capabilities
+      security: [{tailnetAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/HostPathParam'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Host'}
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/hosts/{host}/metrics:
+    get:
+      tags: [metrics]
+      operationId: getHostMetrics
+      summary: Time series for a host
+      description: |
+        Returns at most 300 points regardless of window. When the window holds
+        more points than that, LTTB downsampling is applied (preserves peaks).
+        Gaps (no samples in a bucket) are emitted as `null` in the series arrays.
+      security: [{tailnetAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/HostPathParam'
+        - name: window
+          in: query
+          schema:
+            type: string
+            enum: [5m, 15m, 1h]
+            default: 15m
+        - name: step
+          in: query
+          schema:
+            type: string
+            description: Bucket width (e.g. `5s`). Defaults to `TAILFLOW_HISTORY_STEP`.
+        - name: series
+          in: query
+          description: |
+            Comma-separated list of series to include. `cpu` returns
+            `cpu_total` (and `cpu_per_core` if available); `mem` returns
+            `mem_*`; `net` returns `net_*`. Omit to get all.
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MetricsResponse'}
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/HostUnreachable'
+
+  /api/v1/hosts/{host}/metrics/latest:
+    get:
+      tags: [metrics]
+      operationId: getHostMetricsLatest
+      summary: Latest sample (cheap polling fallback)
+      security: [{tailnetAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/HostPathParam'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LatestMetrics'}
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/HostUnreachable'
+
+  /api/v1/hosts/{host}/processes:
+    get:
+      tags: [processes]
+      operationId: getHostProcesses
+      summary: Top processes
+      description: |
+        Returns processes as limited by tailkitd (default 20, max 100, sorted
+        by CPU desc — design D5). Tailflow does not select top-K itself.
+        Sorting by memory only reorders that limited set.
+      security: [{tailnetAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/HostPathParam'
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [cpu, mem]
+            default: cpu
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ProcessList'}
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/HostUnreachable'
+
+  /api/v1/hosts/{host}/ports:
+    get:
+      tags: [ports]
+      operationId: getHostPorts
+      summary: Listening sockets
+      security: [{tailnetAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/HostPathParam'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PortList'}
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/HostUnreachable'
+
+  /api/v1/hosts/{host}/docker/containers:
+    get:
+      tags: [docker]
+      operationId: listHostContainers
+      summary: Container list
+      security: [{tailnetAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/HostPathParam'
+        - name: state
+          in: query
+          schema:
+            type: string
+            enum: [created, running, paused, restarting, exited, dead]
+        - name: q
+          in: query
+          description: Case-insensitive substring over name and image.
+          schema: {type: string}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ContainerList'}
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+        '503':
+          $ref: '#/components/responses/CapabilityUnavailable'
+
+  /api/v1/hosts/{host}/docker/containers/{id}:
+    get:
+      tags: [docker]
+      operationId: inspectHostContainer
+      summary: Inspect summary
+      security: [{tailnetAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/HostPathParam'
+        - $ref: '#/components/parameters/ContainerIdPathParam'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ContainerInspect'}
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/hosts/{host}/docker/containers/{id}/stats:
+    get:
+      tags: [docker]
+      operationId: streamContainerStats
+      summary: Live container stats (SSE)
+      description: |
+        Server-Sent Events stream of `client.Event[container.StatsResponse]`.
+        Lazy subscription with reference counting: the upstream tailkitd stream
+        opens when the first browser subscribes and closes (after a 10 s grace
+        period) when the last unsubscribes. `Accept: text/event-stream` is
+        required.
+      security: [{tailnetAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/HostPathParam'
+        - $ref: '#/components/parameters/ContainerIdPathParam'
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/CapabilityUnavailable'
+
+  /api/v1/hosts/{host}/docker/containers/{id}/logs:
+    get:
+      tags: [docker]
+      operationId: streamContainerLogs
+      summary: Container logs (one-shot or SSE)
+      description: |
+        Without `Accept: text/event-stream`, returns a JSON object
+        `{logs: "..."}` with the last `tail` lines. With SSE, streams
+        `log.line` events indefinitely.
+      security: [{tailnetAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/HostPathParam'
+        - $ref: '#/components/parameters/ContainerIdPathParam'
+        - name: tail
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 5000
+            default: 200
+      responses:
+        '200':
+          description: JSON snapshot or SSE stream
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logs: {type: string}
+            text/event-stream:
+              schema:
+                type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/CapabilityUnavailable'
+
+  /api/v1/hosts/{host}/docker/swarm/services:
+    get:
+      tags: [docker]
+      operationId: listHostSwarmServices
+      summary: Swarm services
+      description: |
+        Returns 503 with `capability-unavailable` if Swarm is not configured on
+        the host, or 403 with `permission-denied` if `[swarm] enabled=false` in
+        docker.toml. (Revised per README gap #2 — the design's 409 was incorrect.)
+      security: [{tailnetAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/HostPathParam'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SwarmServiceList'}
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+        '503':
+          $ref: '#/components/responses/CapabilityUnavailable'
+
+  /api/v1/hosts/{host}/docker/compose/projects:
+    get:
+      tags: [docker]
+      operationId: listHostComposeProjects
+      summary: Compose projects
+      description: |
+        Lists Compose projects via `GET /integrations/docker/compose/projects`
+        on the daemon. The daemon does not expose a `/compose/services`
+        endpoint today (see README gap #3), so v1 surfaces projects instead.
+      security: [{tailnetAuth: []}]
+      parameters:
+        - $ref: '#/components/parameters/HostPathParam'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ComposeProjectList'}
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+        '503':
+          $ref: '#/components/responses/CapabilityUnavailable'
+
+  /api/v1/stream:
+    get:
+      tags: [stream]
+      operationId: subscribeStream
+      summary: Global SSE stream
+      description: |
+        Single multiplexed SSE endpoint. The client chooses topics via the
+        `topics` query parameter. Supported topics: `hosts`, `metrics:{host}`,
+        `docker:{host}`. Every event carries a monotonic `id`. The hub retains
+        the last 1,000 events; on reconnect with `Last-Event-ID` the server
+        replays the gap, or sends `resync` if the gap is too old.
+      security: [{tailnetAuth: []}]
+      parameters:
+        - name: topics
+          in: query
+          required: true
+          description: |
+            Comma-separated topic list. Examples:
+            - `hosts` (subscribe to `host.updated` and `host.removed`)
+            - `metrics:vps-1` (subscribe to `metrics.sample` for vps-1)
+            - `hosts,metrics:vps-1,docker:vps-2`
+          schema: {type: string}
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '503':
+          $ref: '#/components/responses/TooManyStreams'

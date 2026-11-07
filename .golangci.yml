@@ -1,0 +1,71 @@
+# golangci-lint configuration for Tailflow v1.
+# Mirrors the design §8.3 quality gates.
+
+run:
+  timeout: 5m
+  go: "1.23"
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - depguard
+    - gofmt
+    - goimports
+    - misspell
+    - unconvert
+    - unparam
+    - gocritic
+    - revive
+    - bodyclose
+    - makezero
+    - nilerr
+    - prealloc
+
+linters-settings:
+  goimports:
+    local-prefixes: github.com/wf-pro-dev/tailflow
+  depguard:
+    # Enforces design §F10: only internal/source/tailkitsrc and cmd/tailflow
+    # may import the root tailkit package; internal/source and internal/collector
+    # may import tailkit/client; state, hub, and api import neither.
+    rules:
+      tailkit-root:
+        deny:
+          - pkg: github.com/wf-pro-dev/tailkit
+            desc: "Only internal/source/tailkitsrc and cmd/tailflow may import the root tailkit package. Use internal/source.Fleet or tailkit/client instead."
+      tailkit-client:
+        deny:
+          - pkg: github.com/wf-pro-dev/tailkit/client
+            desc: "Only internal/source, internal/source/tailkitsrc, and internal/collector may import tailkit/client. State, hub, and api must use Tailflow's own types."
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+      - style
+  revive:
+    rules:
+      - name: exported
+        disabled: true  # too noisy for v1; revisit before v1.0 release
+  staticcheck:
+    checks: ["all"]
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters: [gocritic, prealloc, unparam]
+    - path: internal/api/gen\.go
+      linters: [all]
+      # generated code is exempt
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  fix: false
+
+output:
+  formats:
+    - format: colored-line-number
+  sort-results: true

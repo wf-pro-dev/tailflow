@@ -1,0 +1,5 @@
+[
+  {"addr": "0.0.0.0", "port": 22, "proto": "tcp", "pid": 1000, "process": "sshd"},
+  {"addr": "0.0.0.0", "port": 443, "proto": "tcp6", "pid": 1234, "process": "nginx"},
+  {"addr": "127.0.0.1", "port": 3000, "proto": "tcp", "pid": 5678, "process": "node"}
+]

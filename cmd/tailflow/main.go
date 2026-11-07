@@ -1,202 +1,221 @@
+// Command tailflow is the entrypoint for the Tailflow v1 server.
+//
+// In M0 it supports two subcommands:
+//
+//      serve       Start the HTTP server (tailnet or local mode per config)
+//      healthcheck Hit the loopback health listener and exit 0/1
+//
+// The discovery loop, hub, and full API contract land in M1+; for now `serve`
+// starts the listener and serves /api/v1/healthz and /api/v1/meta plus the SPA
+// fallback so the build is runnable and `make dev` shows something.
+//
+// Design refs: §15 (config), §19.1 (developer workflow), §19.2 (health check).
 package main
 
 import (
-	"context"
-	"errors"
-	"log"
-	"net/http"
-	"os"
-	"os/signal"
-	"path/filepath"
-	"strconv"
-	"syscall"
-	"time"
+        "context"
+        "errors"
+        "flag"
+        "fmt"
+        "log/slog"
+        "net/http"
+        "os"
+        "os/signal"
+        "strings"
+        "syscall"
+        "time"
 
-	"github.com/wf-pro-dev/tailflow/internal/api"
-	"github.com/wf-pro-dev/tailflow/internal/collector"
-	"github.com/wf-pro-dev/tailflow/internal/core"
-	"github.com/wf-pro-dev/tailflow/internal/parser"
-	tailruntime "github.com/wf-pro-dev/tailflow/internal/runtime"
-	"github.com/wf-pro-dev/tailflow/internal/store"
-	"github.com/wf-pro-dev/tailflow/internal/topology"
-	"github.com/wf-pro-dev/tailkit"
+        "github.com/wf-pro-dev/tailkit"
+
+        "github.com/wf-pro-dev/tailflow/internal/api"
+        "github.com/wf-pro-dev/tailflow/internal/config"
 )
 
-type config struct {
-	Hostname        string
-	ListenAddr      string
-	DBPath          string
-	StateDir        string
-	Ephemeral       bool
-	NodeTimeout     time.Duration
-	DisableWatchers bool
-}
+// version is set at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
+// tailkitVersion is the pinned tailkit dependency. Hard-coded to match go.mod;
+// when we bump go.mod, update this string in the same change.
+const tailkitVersion = "v0.5.4"
 
 func main() {
-	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	core.InitLogLevelFromEnv()
-
-	cfg, err := loadConfig()
-	if err != nil {
-		log.Fatalf("load config: %v", err)
-	}
-
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-
-	if err := run(ctx, cfg); err != nil && !errors.Is(err, context.Canceled) {
-		log.Fatalf("tailflow: %v", err)
-	}
+        if err := run(os.Args[1:]); err != nil {
+                fmt.Fprintf(os.Stderr, "tailflow: %v\n", err)
+                os.Exit(2)
+        }
 }
 
-func run(ctx context.Context, cfg config) error {
-	if err := os.MkdirAll(filepath.Dir(cfg.DBPath), 0o755); err != nil {
-		return err
-	}
-
-	sqliteStore, err := store.OpenSQLite(cfg.DBPath)
-	if err != nil {
-		return err
-	}
-
-	ts, err := tailkit.NewServer(tailkit.ServerConfig{
-		Hostname:  cfg.Hostname,
-		StateDir:  cfg.StateDir,
-		Ephemeral: cfg.Ephemeral,
-	})
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = ts.Close()
-	}()
-
-	bus := core.NewEventBus()
-	parsers := parser.NewRegistry()
-	collectorSvc := collector.NewCollector(ts, sqliteStore.ProxyConfigs(), bus, parsers)
-	collectorSvc.SetNodeTimeout(cfg.NodeTimeout)
-	topologySvc := topology.NewManager()
-	runtimeSvc := tailruntime.New(
-		tailruntime.Config{
-			DisableWatchers: cfg.DisableWatchers,
-		},
-		collectorSvc,
-		topologySvc,
-		bus,
-	)
-
-	apiHandler := api.NewHandler(
-		sqliteStore.ProxyConfigs(),
-		collectorSvc,
-		topologySvc,
-		runtimeSvc,
-		bus,
-		parsers,
-	)
-	httpHandler := withCORS(apiHandler)
-	httpServer := &http.Server{
-		Addr:    cfg.ListenAddr,
-		Handler: httpHandler,
-	}
-
-	errCh := make(chan error, 3)
-	go func() {
-		if err := runtimeSvc.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			errCh <- err
-		}
-	}()
-
-	go func() {
-		log.Printf("tailflow: serving on http %s", cfg.ListenAddr)
-		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
-		}
-	}()
-
-	go func() {
-		log.Printf("tailflow: serving on tailnet %s%s", cfg.Hostname, cfg.ListenAddr)
-		if err := ts.ListenAndServe(cfg.ListenAddr, httpHandler); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
-		}
-	}()
-
-	select {
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := httpServer.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
-		}
-		return ctx.Err()
-	case err := <-errCh:
-		return err
-	}
+func run(args []string) error {
+        if len(args) == 0 {
+                return errors.New("no subcommand; expected 'serve' or 'healthcheck'")
+        }
+        switch args[0] {
+        case "serve":
+                return cmdServe(args[1:])
+        case "healthcheck":
+                return cmdHealthcheck(args[1:])
+        case "version":
+                fmt.Printf("tailflow %s (tailkit %s)\n", version, tailkitVersion)
+                return nil
+        case "-h", "--help", "help":
+                printUsage(os.Stdout)
+                return nil
+        default:
+                printUsage(os.Stderr)
+                return fmt.Errorf("unknown subcommand %q", args[0])
+        }
 }
 
-func loadConfig() (config, error) {
-	hostname := envOr("TAILFLOW_HOSTNAME", "tailflow")
-	listenAddr := envOr("TAILFLOW_LISTEN_ADDR", ":8080")
-	dbPath := envOr("TAILFLOW_DB_PATH", "tailflow.sqlite3")
-	stateDir := os.Getenv("TAILFLOW_STATE_DIR")
-
-	ephemeral := envBool("TAILFLOW_EPHEMERAL", false)
-	disableWatchers := envBool("TAILFLOW_DISABLE_WATCHERS", false)
-	nodeTimeout, err := envDuration("TAILFLOW_NODE_TIMEOUT", 10*time.Second)
-	if err != nil {
-		return config{}, err
-	}
-
-	return config{
-		Hostname:        hostname,
-		ListenAddr:      listenAddr,
-		DBPath:          dbPath,
-		StateDir:        stateDir,
-		Ephemeral:       ephemeral,
-		NodeTimeout:     nodeTimeout,
-		DisableWatchers: disableWatchers,
-	}, nil
+func printUsage(w *os.File) {
+        fmt.Fprintln(w, "Usage: tailflow <subcommand> [flags]")
+        fmt.Fprintln(w, "")
+        fmt.Fprintln(w, "Subcommands:")
+        fmt.Fprintln(w, "  serve       Start the HTTP server (tailnet or local mode per config)")
+        fmt.Fprintln(w, "  healthcheck Hit the loopback health listener and exit 0/1")
+        fmt.Fprintln(w, "  version     Print version and exit")
 }
 
-func envOr(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return fallback
+// cmdServe implements `tailflow serve`. It loads config, builds the logger,
+// starts the tsnet or local listener, mounts the API handler, and blocks on
+// SIGINT/SIGTERM with a 10 s graceful shutdown (design §15 startup contract).
+func cmdServe(args []string) error {
+        fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+        _ = fs.Parse(args)
+
+        cfg, err := config.Load()
+        if err != nil {
+                return fmt.Errorf("config: %w", err)
+        }
+
+        logger := newLogger(cfg.LogLevel, cfg.LogFormat)
+        logger.Info("tailflow starting",
+                "version", version,
+                "tailkit_version", tailkitVersion,
+                "mode", cfg.Mode,
+                "hostname", cfg.Hostname,
+                "listen", cfg.Listen,
+                "base_path", cfg.BasePath,
+        )
+
+        bufferCfg := api.BufferConfig{
+                HistoryWindow:  cfg.HistoryWindow.String(),
+                HistoryStep:    cfg.HistoryStep.String(),
+                StreamInterval: "2s", // Until U1 ships (design D2 / README gap #1)
+                StaleFactor:    cfg.StaleFactor,
+        }
+
+        handler := api.NewHandler(cfg.BasePath, version, tailkitVersion, bufferCfg, nil)
+
+        // Health listener: always loopback, even in tailnet mode, so the
+        // container health check can reach it without going over the tailnet
+        // (design §19.2). Serves only /api/v1/healthz.
+        healthMux := http.NewServeMux()
+        healthMux.HandleFunc("/api/v1/healthz", func(w http.ResponseWriter, r *http.Request) {
+                w.Header().Set("Content-Type", "application/json")
+                _, _ = w.Write([]byte(`{"status":"ok"}`))
+        })
+        healthSrv := &http.Server{
+                Addr:              cfg.HealthAddr,
+                Handler:           healthMux,
+                ReadHeaderTimeout: 5 * time.Second,
+        }
+        go func() {
+                logger.Info("health listener starting", "addr", cfg.HealthAddr)
+                if err := healthSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+                        logger.Error("health listener failed", "err", err)
+                }
+        }()
+
+        // Main listener. In local mode (the default for `make dev`) we serve
+        // plain HTTP on 127.0.0.1 or whatever TAILFLOW_LISTEN is set to. In
+        // tailnet mode we serve over tsnet (TODO M1: wire the tsnet server;
+        // for M0 we serve plain HTTP so the build is runnable end-to-end).
+        if cfg.Mode == config.ModeTailnet {
+                logger.Warn("tailnet mode is not yet wired in M0; serving plain HTTP on the configured listener. tsnet integration lands in M1.")
+        }
+
+        srv := &http.Server{
+                Addr:              cfg.Listen,
+                Handler:           handler,
+                ReadHeaderTimeout: 5 * time.Second,
+        }
+
+        ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+        defer stop()
+
+        go func() {
+                logger.Info("main listener starting", "addr", cfg.Listen)
+                if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+                        logger.Error("main listener failed", "err", err)
+                        stop()
+                }
+        }()
+
+        <-ctx.Done()
+        logger.Info("shutdown signal received; draining for up to 10s")
+
+        shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+        defer cancel()
+        if err := srv.Shutdown(shutdownCtx); err != nil {
+                logger.Error("graceful shutdown failed", "err", err)
+        }
+        if err := healthSrv.Shutdown(shutdownCtx); err != nil {
+                logger.Error("health listener shutdown failed", "err", err)
+        }
+        logger.Info("tailflow stopped")
+        return nil
 }
 
-func envBool(key string, fallback bool) bool {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
+// cmdHealthcheck implements `tailflow healthcheck`. It hits the loopback
+// health listener and exits 0 on 200, 1 otherwise. Used as the container
+// HEALTHCHECK (design §19.2).
+func cmdHealthcheck(args []string) error {
+        fs := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
+        addr := fs.String("addr", "127.0.0.1:8081", "loopback health listener address")
+        _ = fs.Parse(args)
+
+        client := &http.Client{Timeout: 3 * time.Second}
+        url := "http://" + strings.TrimPrefix(*addr, "http://") + "/api/v1/healthz"
+        resp, err := client.Get(url)
+        if err != nil {
+                fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
+                return errors.New("unhealthy")
+        }
+        defer resp.Body.Close()
+        if resp.StatusCode != http.StatusOK {
+                fmt.Fprintf(os.Stderr, "healthcheck: status %d\n", resp.StatusCode)
+                return errors.New("unhealthy")
+        }
+        return nil
 }
 
-func envDuration(key string, fallback time.Duration) (time.Duration, error) {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return 0, err
-	}
-	return parsed, nil
+// newLogger builds a slog.Logger at the configured level and format.
+// Designed to be swapped for tailkitd's zap when Tailflow is embedded (§20).
+func newLogger(level, format string) *slog.Logger {
+        var lvl slog.Level
+        switch strings.ToLower(level) {
+        case "debug":
+                lvl = slog.LevelDebug
+        case "info":
+                lvl = slog.LevelInfo
+        case "warn":
+                lvl = slog.LevelWarn
+        case "error":
+                lvl = slog.LevelError
+        }
+
+        opts := &slog.HandlerOptions{Level: lvl}
+        var h slog.Handler
+        if strings.ToLower(format) == "text" {
+                h = slog.NewTextHandler(os.Stdout, opts)
+        } else {
+                h = slog.NewJSONHandler(os.Stdout, opts)
+        }
+        return slog.New(h)
 }
 
-func withCORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Last-Event-ID")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
+// Compile-time check that we depend on tailkit (the depguard rule allows
+// cmd/tailflow to import the root package; this is the integration point that
+// will become the tsnet server in M1). For M0 the import is unused but kept
+// to validate the dependency resolves.
+var _ = tailkit.NewServer

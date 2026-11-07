@@ -1,0 +1,34 @@
+# oapi-codegen configuration for Tailflow v1.
+# Generates Go server types and a strict server interface from api/openapi.yaml.
+#
+# Usage:
+#   oapi-codegen --config scripts/oapi-codegen.yaml api/openapi.yaml
+#
+# Output is written to internal/api/gen.go. The file is committed (CI verifies
+# it is up to date via `make contract`).
+
+package: api
+
+generate:
+  models: true
+  chi-server: false
+  echo-server: false
+  fiber-server: false
+  gin-server: false
+  gorilla-server: false
+  http-server: false
+  strict-server: true
+  client: false
+  embedded-spec: true
+
+output: internal/api/gen.go
+
+output-options:
+  skip-flatten: false
+  user-templates: {}
+
+compatibility:
+  apply-chi-middleware-first-to-last: false
+
+# Reuse Go's stdlib types where possible.
+# (No external type mappings needed for v1; we model time.Duration etc. as strings.)
