@@ -15,10 +15,10 @@ GOLANGCI_LINT ?= $(shell command -v golangci-lint || echo "")
 OAPI_CODEGEN ?= $(shell command -v oapi-codegen || echo "")
 SPECTRAL ?= $(shell command -v spectral || echo "")
 
-# Force local toolchain: tailkit's go.mod declares a future Go version, but the
-# code itself does not use 1.26-specific features. Setting GOTOOLCHAIN=local
-# prevents `go` from trying to auto-download a toolchain that does not exist.
-export GOTOOLCHAIN := local
+# Let Go auto-download the toolchain pinned in go.mod (go 1.26.1). If your
+# machine is offline and has Go 1.26.0, set GOTOOLCHAIN=local manually — the
+# code builds fine with 1.26.0, the directive is just a minimum.
+export GOTOOLCHAIN ?= auto
 
 # --- Paths -------------------------------------------------------------------
 
@@ -50,9 +50,9 @@ codegen: codegen-go codegen-ts ## Regenerate Go and TypeScript types from api/op
 .PHONY: codegen-go
 codegen-go: ## Regenerate Go server types from OpenAPI
 	@command -v $(OAPI_CODEGEN) >/dev/null 2>&1 || { \
-		echo "oapi-codegen not found. Install with:"; \
-		echo "  go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest"; \
-		exit 1; }
+	        echo "oapi-codegen not found. Install with:"; \
+	        echo "  go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest"; \
+	        exit 1; }
 	$(OAPI_CODEGEN) --config scripts/oapi-codegen.yaml $(OPENAPI_SPEC)
 
 .PHONY: codegen-ts
@@ -74,14 +74,16 @@ web-dev: ## Start the Vite dev server
 # --- Build -------------------------------------------------------------------
 
 .PHONY: build
-build: web ## Build the single binary with the SPA embedded
+build: ## Build the single binary with the SPA embedded (uses committed web/dist placeholder; run 'make web' first for the real SPA)
 	mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LD_FLAGS)" -o $(BIN_DIR)/tailflow ./cmd/tailflow
 
 .PHONY: build-go
-build-go: ## Build only the Go binary (no SPA rebuild)
-	mkdir -p $(BIN_DIR)
-	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LD_FLAGS)" -o $(BIN_DIR)/tailflow ./cmd/tailflow
+build-go: ## Alias for build (kept for backwards compatibility)
+	$(MAKE) build
+
+.PHONY: build-all
+build-all: web build ## Build the real SPA (needs npm) then the Go binary with it embedded
 
 # --- Test --------------------------------------------------------------------
 
@@ -110,9 +112,9 @@ lint: lint-go lint-web lint-openapi ## Run all linters
 .PHONY: lint-go
 lint-go: ## golangci-lint + depguard import-graph check
 	@command -v $(GOLANGCI_LINT) >/dev/null 2>&1 || { \
-		echo "golangci-lint not found. Install with:"; \
-		echo "  go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; \
-		exit 1; }
+	        echo "golangci-lint not found. Install with:"; \
+	        echo "  go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; \
+	        exit 1; }
 	$(GOLANGCI_LINT) run ./...
 
 .PHONY: lint-web
@@ -122,9 +124,9 @@ lint-web: ## eslint + tsc --noEmit
 .PHONY: lint-openapi
 lint-openapi: ## Spectral lint of api/openapi.yaml
 	@command -v $(SPECTRAL) >/dev/null 2>&1 || { \
-		echo "spectral not found. Install with:"; \
-		echo "  npm install -g @stoplight/spectral-cli"; \
-		exit 1; }
+	        echo "spectral not found. Install with:"; \
+	        echo "  npm install -g @stoplight/spectral-cli"; \
+	        exit 1; }
 	$(SPECTRAL) lint $(OPENAPI_SPEC)
 
 # --- Contract check ---------------------------------------------------------
@@ -132,9 +134,9 @@ lint-openapi: ## Spectral lint of api/openapi.yaml
 .PHONY: contract
 contract: codegen ## Verify generated code is up to date (CI gate)
 	@git diff --exit-code -- internal/api/ web/src/lib/api/generated.ts || { \
-		echo ""; \
-		echo "ERROR: generated code is out of date. Run 'make codegen' and commit the result."; \
-		exit 1; }
+	        echo ""; \
+	        echo "ERROR: generated code is out of date. Run 'make codegen' and commit the result."; \
+	        exit 1; }
 
 # --- Integration / e2e / load -----------------------------------------------
 
