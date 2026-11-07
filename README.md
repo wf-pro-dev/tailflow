@@ -8,7 +8,7 @@ See [`docs/Tailflow-v1-design.md`](docs/Tailflow-v1-design.md) for the full desi
 
 ## Status
 
-**Milestone M0 — Foundations.** Repository skeleton, OpenAPI spec, codegen, fake source, build pipeline. Collection core (M1) is the next milestone.
+**Milestones M0–M4 complete.** M5 (packaging, tsnet wiring, docs) is in progress. The full collection pipeline, React SPA, SSE live updates, container drill-down drawer, and tsnet integration are all live. See the commit history for details.
 
 ## What this branch is
 
@@ -16,8 +16,9 @@ The `v1-rewrite` branch replaces the first Tailflow prototype (preserved on `mai
 
 ## Toolchain notes
 
-- **Go**: The design targets Go 1.26; this branch is currently developed against Go 1.23.4 (the latest stable release available in CI at the time of writing). Set `GOTOOLCHAIN=local` if your Go is older than the version pinned in `tailkit`'s `go.mod`.
-- **tailkit**: pinned to `v0.5.4` (commit `5d4ab42`, the head of branch `0.6.0` at the time of pinning — see design decision D4).
+- **Go**: 1.26+ (the `tailkit` and `tailscale.com` deps require `go 1.26.1`; Go will auto-download the toolchain on first build).
+- **Node**: 22+ (for the SPA build; not needed for backend-only testing).
+- **tailkit**: pinned to `v0.5.4` (commit `5d4ab42` — see design decision D4).
 - **tailkitd**: targets `v0.1.x`.
 
 ## Repository layout
@@ -44,19 +45,63 @@ tailflow/
 
 ## Quick start
 
+### Local mode (no tailnet, for development)
+
 ```bash
-# Run the server in local mode against a scripted fake fleet (no tailnet needed)
-make dev
+# Build the SPA (needs Node 22+)
+cd web && npm install && npm run build && cd ..
 
-# Build the single binary with the SPA embedded
+# Build the Go binary with the SPA embedded
 make build
-./bin/tailflow
 
-# Regenerate Go and TypeScript types from the OpenAPI spec
-make codegen
+# Run in local mode (plain HTTP, empty fake fleet)
+TAILFLOW_MODE=local TAILFLOW_LISTEN=127.0.0.1:8080 ./bin/tailflow serve
 
-# Run all tests with the race detector
-make test-race
+# Open http://127.0.0.1:8080/ in your browser
+```
+
+### Tailnet mode (production, real fleet)
+
+```bash
+# Build
+cd web && npm install && npm run build && cd ..
+make build
+
+# Generate a Tailscale auth key at https://login.tailscale.com/admin/settings/keys
+export TS_AUTHKEY=tskey-auth-xxxxx   # only needed on first start
+export TAILFLOW_HOSTNAME=tailflow
+export TS_STATE_DIR=/var/lib/tailflow
+
+# Run in tailnet mode (HTTPS over tsnet, real tailnet discovery)
+./bin/tailflow serve
+
+# Open https://tailflow.<your-tailnet>.ts.net/ in your browser
+# (You must be on the tailnet to access it.)
+```
+
+### Docker
+
+```bash
+# Create a .env file:
+cat > .env <<EOF
+TS_AUTHKEY=tskey-auth-xxxxx
+TAILFLOW_VERSION=latest
+EOF
+
+# Build and run
+docker compose -f deploy/docker-compose.yml up -d
+
+# Open https://tailflow.<your-tailnet>.ts.net/
+```
+
+### Other targets
+
+```bash
+make test-race    # Go tests with the race detector
+make codegen      # Regenerate Go and TypeScript types from OpenAPI
+make lint         # golangci-lint + eslint + spectral
+make e2e          # Playwright end-to-end tests
+make docker       # Build the container image
 ```
 
 See [Configuration reference](docs/config.md) for the full set of environment variables.

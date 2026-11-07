@@ -1,0 +1,53 @@
+# Tailflow — integration test compose.
+# Design §18.6 integration job, §18.2 integration test layer.
+#
+# Brings up Tailflow alongside a real tailkitd container on the same tailnet,
+# then runs `go test -tags integration ./...` against them. Used by CI on
+# merge to main and nightly.
+#
+# Prerequisites:
+#   - TS_AUTHKEY env var set (for the tailnet join)
+#   - The tailflow image built locally (docker build -f deploy/Dockerfile -t tailflow:test ..)
+#   - The tailkitd image available (ghcr.io/wf-pro-dev/tailkitd:latest)
+
+services:
+  # One tailkitd node that Tailflow will discover.
+  tailkitd:
+    image: ghcr.io/wf-pro-dev/tailkitd:latest
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TAILKITD_HOSTNAME: test-node-1
+    volumes:
+      - tailkitd-state:/var/lib/tailkitd
+      - /var/run/docker.sock:/var/run/docker.sock  # so tailkitd can see containers
+    restart: unless-stopped
+
+  # Tailflow itself.
+  tailflow:
+    image: tailflow:test
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile
+    environment:
+      TAILFLOW_MODE: tailnet
+      TAILFLOW_HOSTNAME: tailflow-test
+      TAILFLOW_LISTEN: :8080
+      TAILFLOW_HEALTH_ADDR: 127.0.0.1:8081
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_STATE_DIR: /var/lib/tailflow
+      TAILFLOW_DISCOVERY_INTERVAL: 5s  # faster for tests
+    volumes:
+      - tailflow-state:/var/lib/tailflow
+    depends_on:
+      - tailkitd
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/tailflow", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  tailkitd-state:
+  tailflow-state:

@@ -33,6 +33,7 @@ import (
         hubpkg "github.com/wf-pro-dev/tailflow/internal/hub"
         "github.com/wf-pro-dev/tailflow/internal/source"
         "github.com/wf-pro-dev/tailflow/internal/source/fakesource"
+        "github.com/wf-pro-dev/tailflow/internal/source/tailkitsrc"
         "github.com/wf-pro-dev/tailflow/internal/state"
         "github.com/wf-pro-dev/tailflow/web"
 )
@@ -138,19 +139,35 @@ func cmdServe(args []string) error {
         hub := hubpkg.NewHub()
         store.SetHub(hubAdapter{hub: hub})
 
-        // Build the Fleet: fakesource in local mode (M1 has no real tailnet
-        // wiring yet — that needs tsnet which lands with the integration tests),
-        // tailkitsrc in tailnet mode.
+        // Build the Fleet and the main listener. In tailnet mode we start a
+        // real tailkit.Server (tsnet) and use tailkitsrc as the production
+        // Fleet. In local mode we use an empty fakesource fleet and serve
+        // plain HTTP for development.
         var fleet source.Fleet
+        var tsSrv *tailkit.Server
         switch cfg.Mode {
         case config.ModeLocal:
-                logger.Warn("local mode: using empty fakesource fleet; no hosts will appear. Set TAILFLOW_MODE=tailnet once tsnet is wired.")
+                logger.Warn("local mode: using empty fakesource fleet; no hosts will appear. Set TAILFLOW_MODE=tailnet for real tailnet access.")
                 fleet = fakesource.NewFleet(nil, &fakesource.Backend{Script: fakesource.NewScript()})
+
         case config.ModeTailnet:
-                // tsnet wiring lands in M2 with the integration test harness.
-                // For M1 we fall back to fakesource so the build is runnable.
-                logger.Warn("tailnet mode: tsnet wiring not yet implemented in M1; using empty fakesource fleet as placeholder")
-                fleet = fakesource.NewFleet(nil, &fakesource.Backend{Script: fakesource.NewScript()})
+                // Start the tsnet server. This joins the tailnet as a new
+                // node named cfg.Hostname (default "tailflow"). The first
+                // start needs TS_AUTHKEY; subsequent starts reuse the state
+                // in TS_STATE_DIR.
+                logger.Info("starting tsnet server", "hostname", cfg.Hostname, "state_dir", cfg.StateDir)
+                tsSrv, err = tailkit.NewServer(tailkit.ServerConfig{
+                        Hostname: cfg.Hostname,
+                        AuthKey:  cfg.AuthKey,
+                        StateDir: cfg.StateDir,
+                })
+                if err != nil {
+                        return fmt.Errorf("tsnet server: %w", err)
+                }
+                defer tsSrv.Close()
+
+                // Production fleet: reaches the tailnet via tailkit.
+                fleet = tailkitsrc.New(tsSrv, logger)
         }
 
         // Collector runs the discovery loop and per-host supervisors.
@@ -192,30 +209,44 @@ func cmdServe(args []string) error {
                 }
         }()
 
-        // Main listener. In local mode (the default for `make dev`) we serve
-        // plain HTTP on 127.0.0.1 or whatever TAILFLOW_LISTEN is set to. In
-        // tailnet mode we serve over tsnet (TODO M1: wire the tsnet server;
-        // for M0 we serve plain HTTP so the build is runnable end-to-end).
-        if cfg.Mode == config.ModeTailnet {
-                logger.Warn("tailnet mode is not yet wired in M0; serving plain HTTP on the configured listener. tsnet integration lands in M1.")
-        }
-
-        srv := &http.Server{
-                Addr:              cfg.Listen,
-                Handler:           handler,
-                ReadHeaderTimeout: 5 * time.Second,
-        }
-
+        // Main listener. In local mode we serve plain HTTP. In tailnet mode
+        // we serve HTTPS over tsnet (Tailscale terminates TLS with a real
+        // cert) behind tailkit.AuthMiddleware.
+        var mainSrv *http.Server
         ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
         defer stop()
 
-        go func() {
-                logger.Info("main listener starting", "addr", cfg.Listen)
-                if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-                        logger.Error("main listener failed", "err", err)
-                        stop()
+        if cfg.Mode == config.ModeTailnet {
+                // Wrap the handler in tailkit.AuthMiddleware so every request
+                // is authenticated as a tailnet peer. The middleware injects
+                // a CallerIdentity into the request context.
+                //
+                // NOTE: tailkit.AuthMiddleware has an X-Forwarded-For trust
+                // issue (upstream requirement U3, README gap #6). Until that
+                // is fixed, only expose Tailflow to a trusted tailnet — do
+                // NOT put it behind a reverse proxy that sets X-Forwarded-For.
+                authedHandler := tailkit.AuthMiddleware(tsSrv)(handler)
+                logger.Info("main listener starting (tsnet HTTPS)", "addr", cfg.Listen, "hostname", cfg.Hostname)
+                go func() {
+                        if err := tsSrv.ListenAndServeTLS(cfg.Listen, authedHandler); err != nil && !errors.Is(err, http.ErrServerClosed) {
+                                logger.Error("tsnet listener failed", "err", err)
+                                stop()
+                        }
+                }()
+        } else {
+                mainSrv = &http.Server{
+                        Addr:              cfg.Listen,
+                        Handler:           handler,
+                        ReadHeaderTimeout: 5 * time.Second,
                 }
-        }()
+                logger.Info("main listener starting (plain HTTP)", "addr", cfg.Listen)
+                go func() {
+                        if err := mainSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+                                logger.Error("main listener failed", "err", err)
+                                stop()
+                        }
+                }()
+        }
 
         <-ctx.Done()
         logger.Info("shutdown signal received; draining for up to 10s")
@@ -225,12 +256,15 @@ func cmdServe(args []string) error {
 
         shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
         defer cancel()
-        if err := srv.Shutdown(shutdownCtx); err != nil {
-                logger.Error("graceful shutdown failed", "err", err)
+        if mainSrv != nil {
+                if err := mainSrv.Shutdown(shutdownCtx); err != nil {
+                        logger.Error("graceful shutdown failed", "err", err)
+                }
         }
         if err := healthSrv.Shutdown(shutdownCtx); err != nil {
                 logger.Error("health listener shutdown failed", "err", err)
         }
+        // tsSrv.Close() is deferred; it shuts down the tsnet node.
         logger.Info("tailflow stopped")
         return nil
 }

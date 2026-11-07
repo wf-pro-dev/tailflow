@@ -1,0 +1,43 @@
+# Tailflow — production docker-compose.
+# Design §19.2.
+#
+# Single service. Joins the tailnet as a tsnet node (not the host's
+# tailscaled). The TS_AUTHKEY is needed only on first start; after that the
+# state in the named volume persists the tailnet identity.
+#
+# Usage:
+#   1. Generate a Tailscale auth key at
+#      https://login.tailscale.com/admin/settings/keys
+#   2. Create a .env file next to this compose file with:
+#        TS_AUTHKEY=tskey-auth-xxxxx
+#        TAILFLOW_VERSION=latest   # or a specific tag
+#   3. docker compose -f deploy/docker-compose.yml up -d
+#   4. Open https://tailflow.<your-tailnet>.ts.net/ in your browser.
+
+services:
+  tailflow:
+    image: ghcr.io/wf-pro-dev/tailflow:${TAILFLOW_VERSION:-latest}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      TAILFLOW_MODE: tailnet
+      TAILFLOW_HOSTNAME: ${TAILFLOW_HOSTNAME:-tailflow}
+      TAILFLOW_LISTEN: :8080
+      TAILFLOW_HEALTH_ADDR: 127.0.0.1:8081
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_STATE_DIR: /var/lib/tailflow
+    volumes:
+      - tailflow-state:/var/lib/tailflow
+    restart: unless-stopped
+    # Health check uses the tailflow healthcheck subcommand, which hits the
+    # loopback-only health listener. distroless has no curl/wget.
+    healthcheck:
+      test: ["CMD", "/tailflow", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  tailflow-state:
