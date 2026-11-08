@@ -35,6 +35,14 @@ func (c *Collector) runCapabilityLoop(ctx context.Context, scope client.HostScop
                         // LastSampleAt (bug B2) and clobber Status. SetCaps only
                         // touches the Caps field.
                         c.store.SetCaps(hostName, caps)
+
+                        // Re-fetch host metadata (role, environment, etc.) from the
+                        // daemon's /host endpoint. This picks up changes to host.toml
+                        // without requiring a supervisor restart.
+                        if fullHost, err := scope.Get(ctx); err == nil {
+                                c.store.UpdateDiscoveryFields(hostName, mapHost(fullHost, c.cfg.StreamInterval))
+                        }
+
                         ticker.Reset(capabilityProbeInterval)
                 }
         }

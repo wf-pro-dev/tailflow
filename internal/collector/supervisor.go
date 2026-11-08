@@ -30,12 +30,29 @@ func (c *Collector) runSupervisor(ctx context.Context, h client.Host) {
         hostName := h.Name
         logger := c.logger.With("host", hostName)
 
-        // Seed the store with the host's static fields. The capability probe
-        // will fill in Caps shortly via SetCaps; until then the host appears
-        // with zero caps.
+        // Seed the store with the host's static fields from the Tailscale peer
+        // cache. Role/Environment/Provider/InstanceType will be empty here
+        // because ListHosts only reads the peer cache, not the daemon's /host
+        // endpoint. We fetch those below via scope.Get(ctx).
         c.store.UpsertHost(mapHost(h, c.cfg.StreamInterval))
 
         scope := c.fleet.Host(hostName)
+
+        // Fetch the full host metadata (role, environment, provider, instance_type,
+        // tags, metadata) from the tailkitd daemon's /host endpoint. ListHosts
+        // only reads the Tailscale peer cache which doesn't have operator
+        // metadata. This is the per-host enrichment recommended by tailkit's
+        // doc comment (peers.go:56-60).
+        if fullHost, err := scope.Get(ctx); err == nil {
+                c.store.UpdateDiscoveryFields(hostName, mapHost(fullHost, c.cfg.StreamInterval))
+                logger.Debug("host metadata enriched",
+                        "role", fullHost.Role,
+                        "environment", fullHost.Environment,
+                        "provider", fullHost.Provider,
+                )
+        } else {
+                logger.Warn("failed to fetch host metadata", "err", err)
+        }
 
         // Initial capability probe (synchronous) so the supervisor knows which
         // loops to start.
