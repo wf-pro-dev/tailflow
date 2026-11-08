@@ -31,9 +31,10 @@ func (c *Collector) runCapabilityLoop(ctx context.Context, scope client.HostScop
                         return ctx.Err()
                 case <-ticker.C():
                         caps := c.probeCapabilities(ctx, scope, hostName, logger)
-                        if h, ok := c.store.Host(hostName); ok {
-                                c.store.UpsertHost(withCaps(h, caps))
-                        }
+                        // Use SetCaps, NOT UpsertHost — UpsertHost can regress
+                        // LastSampleAt (bug B2) and clobber Status. SetCaps only
+                        // touches the Caps field.
+                        c.store.SetCaps(hostName, caps)
                         ticker.Reset(capabilityProbeInterval)
                 }
         }

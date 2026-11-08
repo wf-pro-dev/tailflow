@@ -1,27 +1,21 @@
 // useEventStream — the SSE hook that feeds the TanStack Query cache.
-// Design §17.4.
+// Design §17.4. SSE is the single source of truth; no polling when connected.
 //
 // Opens one EventSource for the given topics. Each event updates the cache
-// with queryClient.setQueryData:
-//   - metrics.sample → appends to the cached metrics series and trims to window
-//   - host.updated → replaces the host row in the hosts list and the single-host cache
-//   - host.removed → removes the host from the caches
-//   - resync → invalidates all active queries
+// with queryClient.setQueryData (NOT invalidateQueries — that would refetch):
+//   - host.updated → patches the host in the hosts-list cache + single-host cache
+//   - host.removed → removes the host from all caches
+//   - metrics.sample → appends to the metrics series + patches last_sample_at
+//   - resync → invalidates all active queries (the only case that refetches)
 //
-// On resync, or on reconnect after more than 30s, the hook invalidates all
-// active queries. If the stream cannot be opened or fails three times in a
-// row, queries fall back to refetchInterval: 10_000 (design §17.4 last bullet).
+// On resync, or on 3 consecutive failures, the hook falls back to polling
+// (refetchInterval: 10s) and shows a banner. When SSE reconnects, polling
+// stops and SSE takes over again.
 
-import { useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { Host, MetricsResponse } from "@/lib/api/client";
 import { queryKeys } from "@/lib/api/hooks";
-
-interface SSEEvent {
-  event: string;
-  id: string;
-  data: string;
-}
 
 interface MetricsSampleData {
   host: string;
@@ -36,8 +30,24 @@ export function useEventStream(topics: string[], enabled: boolean = true) {
   const queryClient = useQueryClient();
   const esRef = useRef<EventSource | null>(null);
   const failureCount = useRef(0);
-  const lastConnectTime = useRef<number>(0);
   const [streamStatus, setStreamStatus] = useState<"connecting" | "open" | "reconnecting" | "closed" | "fallback">("connecting");
+  const pollingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Start polling fallback (10s). Called when SSE fails 3 times.
+  const startPolling = useCallback((qc: QueryClient) => {
+    if (pollingTimerRef.current) return;
+    pollingTimerRef.current = setInterval(() => {
+      qc.invalidateQueries();
+    }, 10_000);
+  }, []);
+
+  // Stop polling fallback. Called when SSE reconnects.
+  const stopPolling = useCallback(() => {
+    if (pollingTimerRef.current) {
+      clearInterval(pollingTimerRef.current);
+      pollingTimerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     if (!enabled || topics.length === 0) return;
@@ -46,19 +56,11 @@ export function useEventStream(topics: string[], enabled: boolean = true) {
     const url = `/api/v1/stream?topics=${encodeURIComponent(topicsParam)}`;
     const es = new EventSource(url);
     esRef.current = es;
-    lastConnectTime.current = Date.now();
 
     es.onopen = () => {
       setStreamStatus("open");
       failureCount.current = 0;
-      // Restore SSE-first defaults: no polling, high staleTime.
-      queryClient.setDefaultOptions({
-        queries: {
-          ...queryClient.getDefaultOptions().queries,
-          refetchInterval: false,
-          staleTime: 5 * 60 * 1000,
-        },
-      });
+      stopPolling(); // SSE is back — stop polling fallback
     };
 
     es.onerror = () => {
@@ -66,127 +68,132 @@ export function useEventStream(topics: string[], enabled: boolean = true) {
       if (failureCount.current >= 3) {
         setStreamStatus("fallback");
         es.close();
-        // Invalidate all queries so they refetch immediately, then set up
-        // a 10s polling interval as fallback (design §17.4).
+        // Invalidate once so queries refetch immediately, then start polling.
         queryClient.invalidateQueries();
-        queryClient.setDefaultOptions({
-          queries: {
-            ...queryClient.getDefaultOptions().queries,
-            refetchInterval: 10_000,
-            staleTime: 0, // always refetch on interval
-          },
-        });
-        // Try to reconnect after 30s.
-        setTimeout(() => {
-          setStreamStatus("reconnecting");
-        }, 30_000);
+        startPolling(queryClient);
       } else {
         setStreamStatus("reconnecting");
       }
     };
 
-    // Generic message handler — EventSource fires `message` for unnamed events.
-    es.addEventListener("message", (e) => handleEvent({ event: "message", id: es.readyState.toString(), data: e.data }));
-    // Named events.
-    const namedHandler = (name: string) => (e: MessageEvent) => {
-      handleEvent({ event: name, id: e.lastEventId, data: e.data });
-    };
-    const eventNames = [
-      "host.updated", "host.removed", "metrics.sample",
-      "port.bound", "port.released",
-      "docker.container.changed", "docker.inventory.replaced",
-      "resync",
-    ];
-    for (const name of eventNames) {
-      es.addEventListener(name, namedHandler(name));
-    }
+    // Event handlers — patch the cache directly, NEVER invalidate (except resync).
+    es.addEventListener("host.updated", (e: MessageEvent) => {
+      const host = safeParse<Host>(e.data);
+      if (!host) return;
 
-    function handleEvent(evt: SSEEvent) {
-      let data: any;
-      try {
-        data = JSON.parse(evt.data);
-      } catch {
-        return;
+      // Patch the single-host cache.
+      queryClient.setQueryData(queryKeys.host(host.name), host);
+
+      // Patch the host in the hosts-list cache (find and replace by name).
+      queryClient.setQueriesData<Host[]>({ queryKey: ["hosts"] }, (old) => {
+        if (!old) return old;
+        const idx = old.findIndex((h) => h.name === host.name);
+        if (idx < 0) return [...old, host];
+        const next = [...old];
+        next[idx] = host;
+        return next;
+      });
+
+      // Only invalidate fleet summary if status changed (not on every field update).
+      // We can't easily check the old value here, so invalidate — it's a cheap query.
+      queryClient.invalidateQueries({ queryKey: queryKeys.fleetSummary });
+    });
+
+    es.addEventListener("host.removed", (e: MessageEvent) => {
+      const data = safeParse<{ name: string }>(e.data);
+      if (!data) return;
+      queryClient.removeQueries({ queryKey: queryKeys.host(data.name) });
+      queryClient.setQueriesData<Host[]>({ queryKey: ["hosts"] }, (old) => {
+        if (!old) return old;
+        return old.filter((h) => h.name !== data.name);
+      });
+      queryClient.invalidateQueries({ queryKey: queryKeys.fleetSummary });
+    });
+
+    es.addEventListener("metrics.sample", (e: MessageEvent) => {
+      const sample = safeParse<MetricsSampleData>(e.data);
+      if (!sample) return;
+
+      // Append to the metrics series cache for each window.
+      for (const window of ["5m", "15m", "1h"]) {
+        const key = queryKeys.metrics(sample.host, window);
+        queryClient.setQueryData<MetricsResponse>(key, (old) => {
+          if (!old) return old;
+          const t = [...old.t, sample.t];
+          const series = { ...old.series };
+          if (series.cpu_total) series.cpu_total = [...series.cpu_total, sample.cpu_total ?? null];
+          if (series.mem_used_pct) series.mem_used_pct = [...series.mem_used_pct, sample.mem_used_pct ?? null];
+          if (series.net_rx_bps) series.net_rx_bps = [...series.net_rx_bps, sample.net_rx_bps ?? null];
+          if (series.net_tx_bps) series.net_tx_bps = [...series.net_tx_bps, sample.net_tx_bps ?? null];
+          // Trim to 720 points (1h at 5s step).
+          const maxLen = 720;
+          if (t.length > maxLen) {
+            t.splice(0, t.length - maxLen);
+            for (const k of Object.keys(series)) {
+              const arr = (series as Record<string, unknown>)[k];
+              if (Array.isArray(arr)) (arr as unknown[]).splice(0, arr.length - maxLen);
+            }
+          }
+          return { ...old, t, series };
+        });
       }
 
-      switch (evt.event) {
-        case "host.updated": {
-          const host = data as Host;
-          // Replace in the single-host cache.
-          queryClient.setQueryData(queryKeys.host(host.name), host);
-          // Replace in the hosts-list caches (we don't know the exact filter
-          // key, so invalidate all hosts queries).
-          queryClient.invalidateQueries({ queryKey: ["hosts"] });
-          queryClient.invalidateQueries({ queryKey: ["fleet", "summary"] });
-          break;
-        }
-        case "host.removed": {
-          const name = data?.name as string;
-          queryClient.removeQueries({ queryKey: queryKeys.host(name) });
-          queryClient.invalidateQueries({ queryKey: ["hosts"] });
-          queryClient.invalidateQueries({ queryKey: ["fleet", "summary"] });
-          break;
-        }
-        case "metrics.sample": {
-          const sample = data as MetricsSampleData;
-          // Append to the metrics series cache for each window.
-          for (const window of ["5m", "15m", "1h"]) {
-            const key = queryKeys.metrics(sample.host, window);
-            queryClient.setQueryData<MetricsResponse>(key, (old) => {
-              if (!old) return old;
-              const t = [...old.t, sample.t];
-              const series = { ...old.series };
-              if (series.cpu_total) series.cpu_total = [...series.cpu_total, sample.cpu_total ?? null];
-              if (series.mem_used_pct) series.mem_used_pct = [...series.mem_used_pct, sample.mem_used_pct ?? null];
-              if (series.net_rx_bps) series.net_rx_bps = [...series.net_rx_bps, sample.net_rx_bps ?? null];
-              if (series.net_tx_bps) series.net_tx_bps = [...series.net_tx_bps, sample.net_tx_bps ?? null];
-              // Trim to 720 points (1h at 5s step).
-              const maxLen = 720;
-              if (t.length > maxLen) {
-                t.splice(0, t.length - maxLen);
-                for (const k of Object.keys(series)) {
-                  const arr = (series as any)[k];
-                  if (Array.isArray(arr)) arr.splice(0, arr.length - maxLen);
-                }
-              }
-              return { ...old, t, series };
-            });
-          }
-          // Also invalidate the latest-metrics cache (not a query key we track
-          // separately, so invalidate the broad host namespace).
-          queryClient.invalidateQueries({ queryKey: ["host", sample.host] });
-          break;
-        }
-        case "docker.container.changed":
-        case "docker.inventory.replaced": {
-          const host = data?.host;
-          if (host) {
-            queryClient.invalidateQueries({ queryKey: queryKeys.containers(host) });
-          }
-          break;
-        }
-        case "port.bound":
-        case "port.released": {
-          const host = data?.host;
-          if (host) {
-            queryClient.invalidateQueries({ queryKey: queryKeys.ports(host) });
-          }
-          break;
-        }
-        case "resync": {
-          // Invalidate all active queries (design §17.4).
-          queryClient.invalidateQueries();
-          break;
-        }
+      // Patch last_sample_at in the single-host cache (NOT invalidate — that
+      // would refetch the whole host object every 5s).
+      queryClient.setQueryData<Host>(queryKeys.host(sample.host), (old) => {
+        if (!old) return old;
+        return { ...old, last_sample_at: new Date(sample.t * 1000).toISOString() };
+      });
+    });
+
+    es.addEventListener("docker.container.changed", (e: MessageEvent) => {
+      const data = safeParse<{ host: string }>(e.data);
+      if (data?.host) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.containers(data.host) });
       }
-    }
+    });
+
+    es.addEventListener("docker.inventory.replaced", (e: MessageEvent) => {
+      const data = safeParse<{ host: string }>(e.data);
+      if (data?.host) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.containers(data.host) });
+      }
+    });
+
+    es.addEventListener("port.bound", (e: MessageEvent) => {
+      const data = safeParse<{ host: string }>(e.data);
+      if (data?.host) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.ports(data.host) });
+      }
+    });
+
+    es.addEventListener("port.released", (e: MessageEvent) => {
+      const data = safeParse<{ host: string }>(e.data);
+      if (data?.host) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.ports(data.host) });
+      }
+    });
+
+    es.addEventListener("resync", () => {
+      // The only event that triggers a full refetch.
+      queryClient.invalidateQueries();
+    });
 
     return () => {
       es.close();
       esRef.current = null;
+      stopPolling();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, topics.join(",")]);
 
   return { status: streamStatus };
+}
+
+function safeParse<T>(data: string): T | null {
+  try {
+    return JSON.parse(data) as T;
+  } catch {
+    return null;
+  }
 }

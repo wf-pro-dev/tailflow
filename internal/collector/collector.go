@@ -165,8 +165,9 @@ func (c *Collector) reconcile(ctx context.Context, discovered []client.Host) {
         // Added: in discovered but not in supervisors.
         for name, h := range discoveredNames {
                 if _, running := c.supervisors[name]; running {
-                        // Already running — update the host's static fields.
-                        c.store.UpsertHost(mapHost(h, c.cfg.StreamInterval))
+                        // Already running — update only discovery-owned fields.
+                        // NEVER use UpsertHost here: it clobbers Caps (bug B1).
+                        c.store.UpdateDiscoveryFields(name, mapHost(h, c.cfg.StreamInterval))
                         continue
                 }
                 // Start a new supervisor.

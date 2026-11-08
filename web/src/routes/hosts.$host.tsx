@@ -1,6 +1,7 @@
 import { createFileRoute, Link, Outlet, redirect } from "@tanstack/react-router";
 import { HostHeader } from "@/features/host/HostHeader";
 import { useHost } from "@/lib/api/hooks";
+import { useEventStream } from "@/lib/stream/useEventStream";
 
 export const Route = createFileRoute("/hosts/$host")({
   beforeLoad: ({ params, location }) => {
@@ -14,6 +15,9 @@ export const Route = createFileRoute("/hosts/$host")({
 
 function HostLayout() {
   const { host } = Route.useParams();
+  // Subscribe to host.updated events so the host detail page receives
+  // capability/status changes in real time (fix F5).
+  useEventStream(["hosts"]);
   return (
     <div className="space-y-4">
       <HostHeader hostName={host} />

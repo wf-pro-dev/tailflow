@@ -7,16 +7,15 @@ import "./styles.css";
 
 // SSE-first query config: when the SSE stream is connected, queries are
 // updated in real time via queryClient.setQueryData (see useEventStream).
-// staleTime is set high (5 min) so TanStack Query doesn't refetch in the
-// background — the SSE events are the source of truth. When SSE is
-// disconnected (the useEventStream hook detects 3 failures), it calls
-// invalidateQueries which triggers a refetch + starts polling.
+// staleTime is Infinity so TanStack Query NEVER refetches in the background
+// — the SSE events are the sole source of truth. When SSE is disconnected,
+// useEventStream starts a 10s polling interval (invalidateQueries).
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 1,
       refetchOnWindowFocus: false,
-      staleTime: 5 * 60 * 1000, // 5 min — SSE keeps data fresh, don't poll
+      staleTime: Infinity, // SSE keeps data fresh; no background refetch
     },
   },
 });
