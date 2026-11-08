@@ -5,13 +5,52 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Design §17.7: status palette with 4.5:1 contrast against both backgrounds.
+        // Dark Aurora palette — Linear quiet dark + neon accents
         status: {
-          healthy: "#16a34a",
-          degraded: "#d97706",
-          stale: "#65a30d",
-          offline: "#6b7280",
-          noagent: "#9333ea",
+          healthy: "#22C55E",
+          degraded: "#F59E0B",
+          stale: "#84CC16",
+          offline: "#71717A",
+          noagent: "#A855F7",
+        },
+        accent: {
+          DEFAULT: "#5E6AD2",
+          hover: "#7B85E0",
+        },
+        neon: {
+          cyan: "#00FFF1",
+          violet: "#9c40ff",
+          amber: "#ffaa40",
+        },
+        chart: {
+          1: "#3DA5E0",
+          2: "#3B5BDB",
+          3: "#6F3FE0",
+          4: "#8B30E0",
+        },
+      },
+      fontFamily: {
+        sans: ["Inter", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "system-ui", "sans-serif"],
+        mono: ["JetBrains Mono", "SF Mono", "Menlo", "Monaco", "Consolas", "monospace"],
+      },
+      animation: {
+        "pulse-glow": "pulse-glow 2s ease-in-out infinite",
+        "fade-in": "fade-in 0.2s ease-out",
+        "slide-in-right": "slide-in-right 0.3s ease-out",
+        "number-tick": "number-tick 0.5s ease-out",
+      },
+      keyframes: {
+        "pulse-glow": {
+          "0%, 100%": { opacity: "1", boxShadow: "0 0 0 0 rgba(34, 197, 94, 0.4)" },
+          "50%": { opacity: "0.8", boxShadow: "0 0 0 6px rgba(34, 197, 94, 0)" },
+        },
+        "fade-in": {
+          "0%": { opacity: "0" },
+          "100%": { opacity: "1" },
+        },
+        "slide-in-right": {
+          "0%": { transform: "translateX(100%)" },
+          "100%": { transform: "translateX(0)" },
         },
       },
     },

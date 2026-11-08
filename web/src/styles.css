@@ -4,22 +4,51 @@
 
 @layer base {
   :root {
-    --status-healthy: #16a34a;
-    --status-degraded: #d97706;
-    --status-stale: #65a30d;
-    --status-offline: #6b7280;
-    --status-noagent: #9333ea;
+    /* Status colors — semantic only */
+    --status-healthy: #22C55E;
+    --status-degraded: #F59E0B;
+    --status-stale: #84CC16;
+    --status-offline: #71717A;
+    --status-noagent: #A855F7;
+  }
+
+  /* Dark mode is the default for a monitoring dashboard */
+  html {
+    color-scheme: dark;
   }
 
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
+    background: #09090B;
+    color: #FAFAFA;
+  }
+
+  /* Custom scrollbar — dark, thin, subtle */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
   }
 }
 
 @layer components {
+  /* Status dots */
   .status-dot {
-    @apply inline-block h-2.5 w-2.5 rounded-full;
+    @apply inline-block h-2 w-2 rounded-full;
+  }
+  .status-dot-pulse {
+    @apply status-dot;
+    animation: pulse-glow 2s ease-in-out infinite;
   }
   .status-healthy { background-color: var(--status-healthy); }
   .status-degraded { background-color: var(--status-degraded); }
@@ -27,15 +56,150 @@
   .status-offline { background-color: var(--status-offline); }
   .status-noagent { background-color: var(--status-noagent); }
 
+  /* Dark Aurora card — inset hairline border + subtle top glow */
   .card {
-    @apply rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900;
+    background: #18181B;
+    border-radius: 12px;
+    padding: 1.25rem;
+    box-shadow:
+      rgba(255, 255, 255, 0.05) 0 0 0 1px inset,
+      0 -20px 80px -20px rgba(255, 255, 255, 0.03) inset;
+    transition: box-shadow 0.2s ease;
+  }
+  .card-hover {
+    cursor: pointer;
+  }
+  .card-hover:hover {
+    box-shadow:
+      rgba(255, 255, 255, 0.08) 0 0 0 1px inset,
+      0 -20px 80px -20px rgba(94, 106, 210, 0.10) inset;
   }
 
+  /* Glassmorphism — sticky topbar, floating panels */
+  .glass {
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    background: rgba(9, 9, 11, 0.8);
+  }
+
+  /* Buttons */
   .btn {
-    @apply inline-flex items-center rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700;
+    @apply inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors duration-150;
+    background: #27272A;
+    color: #FAFAFA;
+    border: 1px solid transparent;
+  }
+  .btn:hover {
+    background: #3F3F46;
+  }
+  .btn-primary {
+    @apply btn;
+    background: #5E6AD2;
+    color: #fff;
+  }
+  .btn-primary:hover {
+    background: #7B85E0;
+  }
+  .btn-ghost {
+    @apply btn;
+    background: transparent;
+    color: #A1A1AA;
+  }
+  .btn-ghost:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: #FAFAFA;
   }
 
+  /* Inputs */
   .input {
-    @apply rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100;
+    @apply rounded-lg px-3 py-1.5 text-sm transition-colors duration-150;
+    background: #18181B;
+    color: #FAFAFA;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    outline: none;
+  }
+  .input:focus {
+    border-color: #5E6AD2;
+    box-shadow: 0 0 0 3px rgba(94, 106, 210, 0.15);
+  }
+  .input::placeholder {
+    color: #52525B;
+  }
+
+  /* Metric label */
+  .metric-label {
+    @apply text-xs font-medium uppercase tracking-wider;
+    color: #71717A;
+  }
+
+  /* Metric value */
+  .metric-value {
+    @apply text-2xl font-bold tracking-tight;
+    color: #FAFAFA;
+  }
+
+  /* Metric subtext */
+  .metric-sub {
+    @apply text-xs;
+    color: #71717A;
+  }
+
+  /* Tab bar item */
+  .tab-item {
+    @apply px-4 py-2 text-sm font-medium transition-colors duration-150 cursor-pointer;
+    color: #71717A;
+    border-bottom: 2px solid transparent;
+  }
+  .tab-item:hover {
+    color: #FAFAFA;
+  }
+  .tab-item-active {
+    @apply tab-item;
+    color: #5E6AD2;
+    border-bottom-color: #5E6AD2;
+  }
+  .tab-item-disabled {
+    @apply tab-item;
+    color: #3F3F46;
+    cursor: not-allowed;
+  }
+
+  /* Table */
+  .table-row {
+    @apply transition-colors duration-150;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  }
+  .table-row:hover {
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  /* Badge */
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium;
+  }
+
+  /* Live indicator — neon cyan pulse */
+  .live-indicator {
+    @apply inline-flex items-center gap-1.5 text-xs font-medium;
+    color: #00FFF1;
+  }
+  .live-indicator::before {
+    content: "";
+    @apply inline-block h-2 w-2 rounded-full;
+    background: #00FFF1;
+    box-shadow: 0 0 6px rgba(0, 255, 241, 0.6);
+    animation: pulse-glow 2s ease-in-out infinite;
+  }
+
+  /* Skeleton loader */
+  .skeleton {
+    @apply rounded;
+    background: linear-gradient(90deg, #18181B 25%, #27272A 50%, #18181B 75%);
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.5s infinite;
+  }
+  @keyframes skeleton-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
   }
 }
