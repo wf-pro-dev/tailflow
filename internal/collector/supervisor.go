@@ -102,12 +102,23 @@ func (c *Collector) runStatusLoop(ctx context.Context, hostName string, logger *
                         // agentReachable would depend on status).
                         agentReachable := h.AgentOnline
                         failures := c.store.Failures(hostName)
+                        // The stale check must use the actual sample cadence, which is the
+                        // aggregation step (HistoryStep, default 5s), NOT the stream
+                        // interval (2s). The aggregator only emits a sample when a bucket
+                        // completes, so samples land every HistoryStep, not every
+                        // StreamInterval. Using StreamInterval here would make the stale
+                        // threshold (3 × 2s = 6s) shorter than the sample cadence (5s),
+                        // causing the status to flap between healthy and stale.
+                        sampleCadence := c.cfg.HistoryStep
+                        if h.StreamInterval > sampleCadence {
+                                sampleCadence = h.StreamInterval
+                        }
                         status := state.DeriveStatus(
                                 h.Online,
                                 agentReachable,
                                 h.LastSampleAt,
                                 c.clock.Now(),
-                                h.StreamInterval,
+                                sampleCadence,
                                 c.cfg.StaleFactor,
                                 failures,
                                 c.cfg.DegradeThreshold,
