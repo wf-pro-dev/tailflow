@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
-import uPlot from "uplot";
-import "uplot/dist/uPlot.min.css";
+import {
+  AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid,
+  Tooltip, ResponsiveContainer, type TooltipProps,
+} from "recharts";
 
 interface Series {
   label: string;
@@ -14,80 +15,93 @@ interface Props {
   format?: (v: number) => string;
   yMax?: number;
   height?: number;
+  type?: "line" | "area";
 }
 
-export function MetricChart({ t, series, format, yMax, height = 200 }: Props) {
-  const ref = useRef<HTMLDivElement>(null);
-  const plotRef = useRef<uPlot | null>(null);
-
-  useEffect(() => {
-    if (!ref.current) return;
-
-    // Build the data array: [timestamps, series1, series2, ...]
-    const data: (number | null)[][] = [t];
+export function MetricChart({ t, series, format, yMax, height = 200, type = "line" }: Props) {
+  // Build chart data: array of { t, series1, series2, ... }
+  const chartData = t.map((timestamp, i) => {
+    const point: Record<string, number | null> = { t: timestamp };
     for (const s of series) {
-      data.push(s.data);
+      point[s.label] = s.data[i] ?? null;
     }
+    return point;
+  });
 
-    const opts: uPlot.Options = {
-      width: ref.current.clientWidth,
-      height,
-      series: [
-        {},
-        ...series.map((s) => ({
-          label: s.label,
-          stroke: s.color,
-          width: 1.5,
-          points: { show: false },
-        })),
-      ],
-      axes: [
-        {},
-        {
-          size: 60,
-          values: (_, ticks) => ticks.map((v) => (format ? format(v) : String(v))),
-          ...(yMax ? { range: [0, yMax] } : {}),
-        },
-      ],
-      scales: {
-        x: { time: true },
-        y: { ...(yMax ? { range: [0, yMax] } : {}) },
-      },
-      cursor: {
-        drag: { x: true, y: false },
-      },
-      legend: {
-        show: true,
-        live: true,
-      },
-    };
+  const formatTooltip = (value: number | null, name: string) => {
+    if (value == null) return ["—", name];
+    return [format ? format(value) : String(value), name];
+  };
 
-    plotRef.current = new uPlot(opts, data as any, ref.current);
+  const formatXAxis = (ts: number) => {
+    const d = new Date(ts * 1000);
+    return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+  };
 
-    const onResize = () => {
-      if (plotRef.current && ref.current) {
-        plotRef.current.setSize({ width: ref.current.clientWidth, height });
-      }
-    };
-    window.addEventListener("resize", onResize);
+  const ChartComponent = type === "area" ? AreaChart : LineChart;
 
-    return () => {
-      window.removeEventListener("resize", onResize);
-      plotRef.current?.destroy();
-      plotRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Update data when it changes.
-  useEffect(() => {
-    if (!plotRef.current) return;
-    const data: (number | null)[][] = [t];
-    for (const s of series) {
-      data.push(s.data);
-    }
-    plotRef.current.setData(data as any);
-  }, [t, series]);
-
-  return <div ref={ref} className="w-full" />;
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <ChartComponent data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+        <XAxis
+          dataKey="t"
+          tickFormatter={formatXAxis}
+          stroke="#52525B"
+          tick={{ fontSize: 11, fill: "#71717A" }}
+          tickLine={false}
+          axisLine={false}
+        />
+        <YAxis
+          stroke="#52525B"
+          tick={{ fontSize: 11, fill: "#71717A" }}
+          tickLine={false}
+          axisLine={false}
+          width={50}
+          domain={yMax ? [0, yMax] : ["auto", "auto"]}
+          tickFormatter={(v: number) => format ? format(v) : String(v)}
+        />
+        <Tooltip
+          formatter={formatTooltip as any}
+          labelFormatter={(label: number) => {
+            const d = new Date(label * 1000);
+            return d.toLocaleTimeString();
+          }}
+          contentStyle={{
+            background: "#18181B",
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: "8px",
+            fontSize: "12px",
+            color: "#FAFAFA",
+          }}
+          labelStyle={{ color: "#71717A", marginBottom: "4px" }}
+        />
+        {series.map((s) =>
+          type === "area" ? (
+            <Area
+              key={s.label}
+              type="monotone"
+              dataKey={s.label}
+              stroke={s.color}
+              fill={s.color}
+              fillOpacity={0.1}
+              strokeWidth={1.5}
+              dot={false}
+              connectNulls
+            />
+          ) : (
+            <Line
+              key={s.label}
+              type="monotone"
+              dataKey={s.label}
+              stroke={s.color}
+              strokeWidth={1.5}
+              dot={false}
+              connectNulls
+            />
+          )
+        )}
+      </ChartComponent>
+    </ResponsiveContainer>
+  );
 }

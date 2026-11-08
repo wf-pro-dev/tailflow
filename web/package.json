@@ -21,7 +21,7 @@
     "@tanstack/react-virtual": "^3.11.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "uplot": "^1.6.31"
+    "recharts": "^3.10.1"
   },
   "devDependencies": {
     "@tanstack/router-plugin": "^1.92.0",

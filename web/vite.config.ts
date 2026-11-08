@@ -31,10 +31,7 @@ export default defineConfig({
     // runtime loading — react-dom sees `undefined` for react's internals.
     rollupOptions: {
       output: {
-        // Only split the heavy vendor libs that don't depend on react.
-        manualChunks: {
-          uplot: ["uplot"],
-        },
+        // Let Vite handle code splitting automatically.
       },
     },
   },

@@ -10,10 +10,12 @@ interface SystemdUnit {
 }
 
 export function SystemdTab({ host }: { host: string }) {
+  // Systemd units don't have an SSE stream — poll every 30s.
+  // This is the only tab that polls; all others use SSE.
   const { data, isLoading, error } = useQuery({
     queryKey: ["systemd", host],
     queryFn: () => api.systemdUnits(host),
-    staleTime: 30_000, // systemd doesn't change often; poll every 30s
+    staleTime: 30_000,
     refetchInterval: 30_000,
   });
 

@@ -15,7 +15,7 @@ export function DockerTab({ host }: { host: string }) {
           <button
             key={s}
             onClick={() => setSub(s)}
-            className={`btn capitalize ${sub === s ? "bg-blue-600 text-white dark:bg-blue-600 dark:text-white" : ""}`}
+            className={`btn capitalize ${sub === s ? "btn-primary" : "btn-ghost"}`}
           >
             {s}
           </button>
@@ -40,27 +40,27 @@ export function DockerTab({ host }: { host: string }) {
 
 function ContainersTable({ host, onSelect }: { host: string; onSelect: (id: string) => void }) {
   const { data, isLoading, error } = useHostContainers(host);
-  if (isLoading) return <div className="text-gray-500">Loading containers…</div>;
+  if (isLoading) return <div className="space-y-1">{[0,1,2,3,4].map(i => <div key={i} className="skeleton h-12 rounded-lg" />)}</div>;
   if (error) {
     if ((error as any).type === "capability-unavailable") {
-      return <div className="text-amber-600">Docker is not enabled on this host.</div>;
+      return <div className="card text-amber-400">Docker is not enabled on this host.</div>;
     }
-    return <div className="text-red-600">Error: {error.message}</div>;
+    return <div className="card text-red-400">Error: {error.message}</div>;
   }
-  if (!data || data.containers.length === 0) {
-    return <div className="text-gray-500">No containers.</div>;
+  if (!data || !data.containers || data.containers.length === 0) {
+    return <div className="card py-12 text-center text-zinc-500"><p className="text-sm">No containers</p></div>;
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div className="card !p-0 overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-gray-200 text-left text-xs uppercase text-gray-500 dark:border-gray-800 dark:text-gray-400">
-            <th className="py-2 pr-4">State</th>
-            <th className="py-2 pr-4">Name</th>
-            <th className="py-2 pr-4">Image</th>
-            <th className="py-2 pr-4">Status</th>
-            <th className="py-2 pr-4">Ports</th>
+          <tr className="text-left text-xs uppercase tracking-wider text-zinc-500 border-b border-white/[0.04]">
+            <th className="px-4 py-3 font-medium">State</th>
+            <th className="px-4 py-3 font-medium">Name</th>
+            <th className="px-4 py-3 font-medium">Image</th>
+            <th className="px-4 py-3 font-medium">Status</th>
+            <th className="px-4 py-3 font-medium">Ports</th>
           </tr>
         </thead>
         <tbody>
@@ -68,15 +68,13 @@ function ContainersTable({ host, onSelect }: { host: string; onSelect: (id: stri
             <tr
               key={c.id}
               onClick={() => onSelect(c.id)}
-              className="cursor-pointer border-b border-gray-100 hover:bg-blue-50 dark:border-gray-900 dark:hover:bg-gray-800/50"
+              className="table-row cursor-pointer"
             >
-              <td className="py-2 pr-4">
-                <StateChip state={c.state} />
-              </td>
-              <td className="py-2 pr-4 font-medium">{c.name}</td>
-              <td className="py-2 pr-4 font-mono text-xs text-gray-500 dark:text-gray-400">{c.image}</td>
-              <td className="py-2 pr-4 text-gray-500 dark:text-gray-400">{c.status || "—"}</td>
-              <td className="py-2 pr-4 font-mono text-xs">
+              <td className="px-4 py-3"><StateChip state={c.state} /></td>
+              <td className="px-4 py-3 font-medium text-zinc-200">{c.name}</td>
+              <td className="px-4 py-3 font-mono text-xs text-zinc-500">{c.image}</td>
+              <td className="px-4 py-3 text-zinc-400">{c.status || "—"}</td>
+              <td className="px-4 py-3 font-mono text-xs text-zinc-500">
                 {(c.ports ?? []).map((p, i) => (
                   <div key={i}>
                     {p.public ? `${p.ip || "0.0.0.0"}:${p.public}->` : ""}
@@ -88,41 +86,99 @@ function ContainersTable({ host, onSelect }: { host: string; onSelect: (id: stri
           ))}
         </tbody>
       </table>
+      <div className="border-t border-white/[0.04] px-4 py-2 text-xs text-zinc-500">
+        {data.containers.length} containers
+      </div>
+    </div>
+  );
+}
+
+function ImagesTable({ host }: { host: string }) {
+  const { data, isLoading, error } = useHostDockerImages(host);
+  if (isLoading) return <div className="space-y-1">{[0,1,2,3,4].map(i => <div key={i} className="skeleton h-12 rounded-lg" />)}</div>;
+  if (error) {
+    if ((error as any).type === "capability-unavailable") {
+      return <div className="card text-amber-400">Docker is not enabled on this host.</div>;
+    }
+    return <div className="card text-red-400">Error: {error.message}</div>;
+  }
+  // Null-safe: data or data.images may be null/undefined
+  const images = data?.images ?? [];
+  if (images.length === 0) {
+    return <div className="card py-12 text-center text-zinc-500"><p className="text-sm">No images</p></div>;
+  }
+
+  return (
+    <div className="card !p-0 overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-xs uppercase tracking-wider text-zinc-500 border-b border-white/[0.04]">
+            <th className="px-4 py-3 font-medium">Tags</th>
+            <th className="px-4 py-3 font-medium">ID</th>
+            <th className="px-4 py-3 font-medium">Size</th>
+            <th className="px-4 py-3 font-medium">Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          {images.map((img) => (
+            <tr key={img.id} className="table-row">
+              <td className="px-4 py-3 font-mono text-xs text-zinc-300">
+                {(img.tags ?? ["<none>"]).map((t) => (
+                  <div key={t}>{t}</div>
+                ))}
+              </td>
+              <td className="px-4 py-3 font-mono text-xs text-zinc-500">
+                {img.id.replace("sha256:", "").substring(0, 12)}
+              </td>
+              <td className="px-4 py-3 text-zinc-400">
+                {img.size ? formatImageSize(img.size) : "—"}
+              </td>
+              <td className="px-4 py-3 text-zinc-500">
+                {img.created_at ? new Date(img.created_at * 1000).toLocaleDateString() : "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="border-t border-white/[0.04] px-4 py-2 text-xs text-zinc-500">
+        {images.length} images
+      </div>
     </div>
   );
 }
 
 function SwarmTable({ host }: { host: string }) {
   const { data, isLoading, error } = useHostSwarmServices(host);
-  if (isLoading) return <div className="text-gray-500">Loading swarm services…</div>;
+  if (isLoading) return <div className="space-y-1">{[0,1,2,3].map(i => <div key={i} className="skeleton h-12 rounded-lg" />)}</div>;
   if (error) {
     if ((error as any).type === "capability-unavailable" || (error as any).type === "permission-denied") {
-      return <div className="text-amber-600">Swarm is not available on this host: {(error as any).detail}</div>;
+      return <div className="card text-amber-400">Swarm is not available: {(error as any).detail}</div>;
     }
-    return <div className="text-red-600">Error: {error.message}</div>;
+    return <div className="card text-red-400">Error: {error.message}</div>;
   }
-  if (!data || data.services.length === 0) {
-    return <div className="text-gray-500">No swarm services.</div>;
+  const services = data?.services ?? [];
+  if (services.length === 0) {
+    return <div className="card py-12 text-center text-zinc-500"><p className="text-sm">No swarm services</p></div>;
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div className="card !p-0 overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-gray-200 text-left text-xs uppercase text-gray-500 dark:border-gray-800 dark:text-gray-400">
-            <th className="py-2 pr-4">Name</th>
-            <th className="py-2 pr-4">Image</th>
-            <th className="py-2 pr-4">Mode</th>
-            <th className="py-2 pr-4">Replicas</th>
+          <tr className="text-left text-xs uppercase tracking-wider text-zinc-500 border-b border-white/[0.04]">
+            <th className="px-4 py-3 font-medium">Name</th>
+            <th className="px-4 py-3 font-medium">Image</th>
+            <th className="px-4 py-3 font-medium">Mode</th>
+            <th className="px-4 py-3 font-medium">Replicas</th>
           </tr>
         </thead>
         <tbody>
-          {data.services.map((s) => (
-            <tr key={s.id} className="border-b border-gray-100 dark:border-gray-900">
-              <td className="py-2 pr-4 font-medium">{s.name}</td>
-              <td className="py-2 pr-4 font-mono text-xs text-gray-500 dark:text-gray-400">{s.image}</td>
-              <td className="py-2 pr-4">{s.mode || "—"}</td>
-              <td className="py-2 pr-4">{s.replicas ?? "—"}</td>
+          {services.map((s) => (
+            <tr key={s.id} className="table-row">
+              <td className="px-4 py-3 font-medium text-zinc-200">{s.name}</td>
+              <td className="px-4 py-3 font-mono text-xs text-zinc-500">{s.image}</td>
+              <td className="px-4 py-3 text-zinc-400">{s.mode || "—"}</td>
+              <td className="px-4 py-3 text-zinc-400">{s.replicas ?? "—"}</td>
             </tr>
           ))}
         </tbody>
@@ -133,33 +189,34 @@ function SwarmTable({ host }: { host: string }) {
 
 function ComposeTable({ host }: { host: string }) {
   const { data, isLoading, error } = useHostComposeProjects(host);
-  if (isLoading) return <div className="text-gray-500">Loading compose projects…</div>;
+  if (isLoading) return <div className="space-y-1">{[0,1,2].map(i => <div key={i} className="skeleton h-12 rounded-lg" />)}</div>;
   if (error) {
     if ((error as any).type === "capability-unavailable" || (error as any).type === "permission-denied") {
-      return <div className="text-amber-600">Compose is not available on this host: {(error as any).detail}</div>;
+      return <div className="card text-amber-400">Compose is not available: {(error as any).detail}</div>;
     }
-    return <div className="text-red-600">Error: {error.message}</div>;
+    return <div className="card text-red-400">Error: {error.message}</div>;
   }
-  if (!data || data.projects.length === 0) {
-    return <div className="text-gray-500">No compose projects.</div>;
+  const projects = data?.projects ?? [];
+  if (projects.length === 0) {
+    return <div className="card py-12 text-center text-zinc-500"><p className="text-sm">No compose projects</p></div>;
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div className="card !p-0 overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-gray-200 text-left text-xs uppercase text-gray-500 dark:border-gray-800 dark:text-gray-400">
-            <th className="py-2 pr-4">Name</th>
-            <th className="py-2 pr-4">Status</th>
-            <th className="py-2 pr-4">Config files</th>
+          <tr className="text-left text-xs uppercase tracking-wider text-zinc-500 border-b border-white/[0.04]">
+            <th className="px-4 py-3 font-medium">Name</th>
+            <th className="px-4 py-3 font-medium">Status</th>
+            <th className="px-4 py-3 font-medium">Config files</th>
           </tr>
         </thead>
         <tbody>
-          {data.projects.map((p, i) => (
-            <tr key={`${p.name}:${i}`} className="border-b border-gray-100 dark:border-gray-900">
-              <td className="py-2 pr-4 font-medium">{p.name}</td>
-              <td className="py-2 pr-4 text-gray-500 dark:text-gray-400">{p.status || "—"}</td>
-              <td className="py-2 pr-4 font-mono text-xs text-gray-500 dark:text-gray-400">{p.config_files || "—"}</td>
+          {projects.map((p, i) => (
+            <tr key={`${p.name}:${i}`} className="table-row">
+              <td className="px-4 py-3 font-medium text-zinc-200">{p.name}</td>
+              <td className="px-4 py-3 text-zinc-400">{p.status || "—"}</td>
+              <td className="px-4 py-3 font-mono text-xs text-zinc-500">{p.config_files || "—"}</td>
             </tr>
           ))}
         </tbody>
@@ -170,20 +227,21 @@ function ComposeTable({ host }: { host: string }) {
 
 function StateChip({ state }: { state: string }) {
   const colors: Record<string, string> = {
-    running: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
-    exited: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
-    paused: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
-    restarting: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
-    created: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400",
-    dead: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
+    running: "bg-green-500/10 text-green-400",
+    exited: "bg-zinc-500/10 text-zinc-400",
+    paused: "bg-amber-500/10 text-amber-400",
+    restarting: "bg-blue-500/10 text-blue-400",
+    created: "bg-purple-500/10 text-purple-400",
+    dead: "bg-red-500/10 text-red-400",
   };
   return (
-    <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${colors[state] || colors.exited}`}>
+    <span className={`badge ${colors[state] || colors.exited}`}>
       {state}
     </span>
   );
 }
 
+<<<<<<< HEAD
 function ImagesTable({ host }: { host: string }) {
   const { data, isLoading, error } = useHostDockerImages(host);
   if (isLoading) return <div className="text-zinc-500">Loading images…</div>;
@@ -233,6 +291,8 @@ function ImagesTable({ host }: { host: string }) {
   );
 }
 
+=======
+>>>>>>> dd1e634 (fix: 4 bug fixes + Recharts charts + SSE-first audit)
 function formatImageSize(bytes: number): string {
   const units = ["B", "KB", "MB", "GB", "TB"];
   let i = 0;
