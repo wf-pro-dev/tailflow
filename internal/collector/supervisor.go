@@ -88,6 +88,12 @@ func (c *Collector) runSupervisor(ctx context.Context, h client.Host) {
                 })
         }
 
+        // Systemd loop: poll units every 30s. Always start — systemd is
+        // available on all Linux hosts with systemd.toml.
+        g.Go(func() error {
+                return c.runSystemdLoop(gctx, scope, hostName, logger)
+        })
+
         // Status loop: recompute Status every 1s.
         g.Go(func() error {
                 return c.runStatusLoop(gctx, hostName, logger)

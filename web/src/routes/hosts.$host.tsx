@@ -38,6 +38,7 @@ const TABS: TabDef[] = [
   { label: "Processes", to: "/hosts/$host/processes", cap: "metrics" },
   { label: "Ports", to: "/hosts/$host/ports", cap: "metrics" },
   { label: "Docker", to: "/hosts/$host/docker", cap: "docker" },
+  { label: "Systemd", to: "/hosts/$host/systemd" },
 ];
 
 function TabBar({ host }: { host: string }) {

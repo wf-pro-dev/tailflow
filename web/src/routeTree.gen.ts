@@ -15,6 +15,7 @@ import { Route as HostsHostDockerRouteImport } from './routes/hosts.$host.docker
 import { Route as HostsHostMetricsRouteImport } from './routes/hosts.$host.metrics'
 import { Route as HostsHostPortsRouteImport } from './routes/hosts.$host.ports'
 import { Route as HostsHostProcessesRouteImport } from './routes/hosts.$host.processes'
+import { Route as HostsHostSystemdRouteImport } from './routes/hosts.$host.systemd'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -46,6 +47,11 @@ const HostsHostProcessesRoute = HostsHostProcessesRouteImport.update({
   path: '/processes',
   getParentRoute: () => HostsHostRoute,
 } as any)
+const HostsHostSystemdRoute = HostsHostSystemdRouteImport.update({
+  id: '/systemd',
+  path: '/systemd',
+  getParentRoute: () => HostsHostRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -54,6 +60,7 @@ export interface FileRoutesByFullPath {
   '/hosts/$host/metrics': typeof HostsHostMetricsRoute
   '/hosts/$host/ports': typeof HostsHostPortsRoute
   '/hosts/$host/processes': typeof HostsHostProcessesRoute
+  '/hosts/$host/systemd': typeof HostsHostSystemdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -62,6 +69,7 @@ export interface FileRoutesByTo {
   '/hosts/$host/metrics': typeof HostsHostMetricsRoute
   '/hosts/$host/ports': typeof HostsHostPortsRoute
   '/hosts/$host/processes': typeof HostsHostProcessesRoute
+  '/hosts/$host/systemd': typeof HostsHostSystemdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -71,6 +79,7 @@ export interface FileRoutesById {
   '/hosts/$host/metrics': typeof HostsHostMetricsRoute
   '/hosts/$host/ports': typeof HostsHostPortsRoute
   '/hosts/$host/processes': typeof HostsHostProcessesRoute
+  '/hosts/$host/systemd': typeof HostsHostSystemdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -81,6 +90,7 @@ export interface FileRouteTypes {
     | '/hosts/$host/metrics'
     | '/hosts/$host/ports'
     | '/hosts/$host/processes'
+    | '/hosts/$host/systemd'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -89,6 +99,7 @@ export interface FileRouteTypes {
     | '/hosts/$host/metrics'
     | '/hosts/$host/ports'
     | '/hosts/$host/processes'
+    | '/hosts/$host/systemd'
   id:
     | '__root__'
     | '/'
@@ -97,6 +108,7 @@ export interface FileRouteTypes {
     | '/hosts/$host/metrics'
     | '/hosts/$host/ports'
     | '/hosts/$host/processes'
+    | '/hosts/$host/systemd'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -148,6 +160,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof HostsHostProcessesRouteImport
       parentRoute: typeof HostsHostRoute
     }
+    '/hosts/$host/systemd': {
+      id: '/hosts/$host/systemd'
+      path: '/systemd'
+      fullPath: '/hosts/$host/systemd'
+      preLoaderRoute: typeof HostsHostSystemdRouteImport
+      parentRoute: typeof HostsHostRoute
+    }
   }
 }
 
@@ -156,6 +175,7 @@ interface HostsHostRouteChildren {
   HostsHostMetricsRoute: typeof HostsHostMetricsRoute
   HostsHostPortsRoute: typeof HostsHostPortsRoute
   HostsHostProcessesRoute: typeof HostsHostProcessesRoute
+  HostsHostSystemdRoute: typeof HostsHostSystemdRoute
 }
 
 const HostsHostRouteChildren: HostsHostRouteChildren = {
@@ -163,6 +183,7 @@ const HostsHostRouteChildren: HostsHostRouteChildren = {
   HostsHostMetricsRoute: HostsHostMetricsRoute,
   HostsHostPortsRoute: HostsHostPortsRoute,
   HostsHostProcessesRoute: HostsHostProcessesRoute,
+  HostsHostSystemdRoute: HostsHostSystemdRoute,
 }
 
 const HostsHostRouteWithChildren = HostsHostRoute._addFileChildren(

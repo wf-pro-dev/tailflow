@@ -326,3 +326,29 @@ func (h *Handler) handleHostDockerImages(w http.ResponseWriter, r *http.Request)
         }
         writeJSON(w, http.StatusOK, resp)
 }
+
+// --- /api/v1/hosts/{host}/systemd/units -------------------------------------
+
+func (h *Handler) handleHostSystemdUnits(w http.ResponseWriter, r *http.Request) {
+        host := r.PathValue("host")
+        if host == "" {
+                host = pathLastSegment(r.URL.Path)
+        }
+        hh, ok := h.store.Host(host)
+        if !ok {
+                h.writeProblem(w, r, http.StatusNotFound, "host-not-found",
+                        "Host not found", "no host with that name", host)
+                return
+        }
+        if status := hostStatusToHTTP(hh.Status); status != http.StatusOK {
+                h.writeProblem(w, r, status, "host-unreachable",
+                        "Host is unreachable", "tailkitd peer is offline or absent", host)
+                return
+        }
+        units := h.store.SystemdUnits(host)
+        resp := map[string]any{
+                "host":  host,
+                "units": units,
+        }
+        writeJSON(w, http.StatusOK, resp)
+}

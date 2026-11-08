@@ -91,6 +91,8 @@ export const api = {
     fetchJSON<ComposeProjectList>(`/hosts/${encodeURIComponent(host)}/docker/compose/projects`),
   hostDockerImages: (host: string) =>
     fetchJSON<{ host: string; images: DockerImage[] }>(`/hosts/${encodeURIComponent(host)}/docker/images`),
+  systemdUnits: (host: string) =>
+    fetchJSON<{ host: string; units: any[] }>(`/hosts/${encodeURIComponent(host)}/systemd/units`),
 };
 
 // --- Domain types (mirror the OpenAPI schemas) ---

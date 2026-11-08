@@ -224,6 +224,15 @@ type DockerImage struct {
         CreatedAt int64    `json:"created_at,omitempty"`
 }
 
+// SystemdUnit is one systemd unit on a host.
+type SystemdUnit struct {
+        Name        string `json:"name"`
+        LoadState   string `json:"load_state"`
+        ActiveState string `json:"active_state"`
+        SubState    string `json:"sub_state"`
+        Description string `json:"description,omitempty"`
+}
+
 // ContainerInventory is the latest container/swarm/compose state for a host.
 type ContainerInventory struct {
         Containers      []Container      `json:"containers,omitempty"`

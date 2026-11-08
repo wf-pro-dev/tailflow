@@ -152,6 +152,8 @@ func (h *Handler) routeHostPath(w http.ResponseWriter, r *http.Request, path str
                 h.handleHostComposeProjects(w, r)
         case sub == "docker/images" && r.Method == http.MethodGet:
                 h.handleHostDockerImages(w, r)
+        case sub == "systemd/units" && r.Method == http.MethodGet:
+                h.handleHostSystemdUnits(w, r)
         default:
                 h.writeProblem(w, r, http.StatusNotFound, "not-found",
                         "Not found", "no such endpoint: "+path, host)

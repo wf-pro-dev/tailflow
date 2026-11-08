@@ -46,6 +46,7 @@ type hostState struct {
         latest      Latest
         ports       map[PortKey]Port
         containers  ContainerInventory
+        systemdUnits []SystemdUnit
         status      Status
         failures    int
 }
@@ -495,6 +496,28 @@ func (s *Store) SetUptime(name string, uptime uint64) {
                 hs.host.UptimeSeconds = uptime
         }
         hs.mu.Unlock()
+}
+
+// SetSystemdUnits replaces the systemd unit list for a host.
+func (s *Store) SetSystemdUnits(name string, units []SystemdUnit) {
+        hs := s.hostStateByName(name)
+        if hs == nil {
+                return
+        }
+        hs.mu.Lock()
+        hs.systemdUnits = units
+        hs.mu.Unlock()
+}
+
+// SystemdUnits returns a copy of the host's systemd units.
+func (s *Store) SystemdUnits(name string) []SystemdUnit {
+        hs := s.hostStateByName(name)
+        if hs == nil {
+                return nil
+        }
+        hs.mu.RLock()
+        defer hs.mu.RUnlock()
+        return append([]SystemdUnit(nil), hs.systemdUnits...)
 }
 
 // --- Docker -----------------------------------------------------------------
