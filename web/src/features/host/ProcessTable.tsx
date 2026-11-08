@@ -4,36 +4,36 @@ import { bytes } from "@/lib/format";
 export function ProcessTable({ host }: { host: string }) {
   const { data, isLoading, error } = useHostProcesses(host);
 
-  if (isLoading) return <div className="text-gray-500">Loading processes…</div>;
-  if (error) return <div className="text-red-600">Error: {error.message}</div>;
+  if (isLoading) return <div className="space-y-1">{[0,1,2,3,4].map(i => <div key={i} className="skeleton h-12 rounded-lg" />)}</div>;
+  if (error) return <div className="card text-red-400">Error: {error.message}</div>;
   if (!data) return null;
 
   return (
     <div>
-      <div className="mb-3 text-sm text-gray-500 dark:text-gray-400">
+      <div className="mb-3 text-sm text-zinc-500">
         Top {data.truncated_to} by CPU on this host
       </div>
-      <div className="overflow-x-auto">
+      <div className="card !p-0 overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-gray-200 text-left text-xs uppercase text-gray-500 dark:border-gray-800 dark:text-gray-400">
-              <th className="py-2 pr-4">PID</th>
-              <th className="py-2 pr-4">Name</th>
-              <th className="py-2 pr-4">Status</th>
-              <th className="py-2 pr-4 text-right">CPU %</th>
-              <th className="py-2 pr-4 text-right">RSS</th>
-              <th className="py-2 pr-4">Command</th>
+            <tr className="text-left text-xs uppercase tracking-wider text-zinc-500 border-b border-white/[0.04]">
+              <th className="px-4 py-3 font-medium">PID</th>
+              <th className="px-4 py-3 font-medium">Name</th>
+              <th className="px-4 py-3 font-medium">Status</th>
+              <th className="px-4 py-3 font-medium text-right">CPU %</th>
+              <th className="px-4 py-3 font-medium text-right">RSS</th>
+              <th className="px-4 py-3 font-medium">Command</th>
             </tr>
           </thead>
           <tbody>
             {data.processes.map((p) => (
-              <tr key={p.pid} className="border-b border-gray-100 dark:border-gray-900">
-                <td className="py-2 pr-4 font-mono text-xs">{p.pid}</td>
-                <td className="py-2 pr-4 font-medium">{p.name}</td>
-                <td className="py-2 pr-4 text-gray-500 dark:text-gray-400">{p.status}</td>
-                <td className="py-2 pr-4 text-right font-mono">{p.cpu_percent.toFixed(1)}</td>
-                <td className="py-2 pr-4 text-right font-mono text-xs">{bytes(p.memory_rss_bytes)}</td>
-                <td className="py-2 pr-4 font-mono text-xs text-gray-500 dark:text-gray-400">{p.cmdline || "—"}</td>
+              <tr key={p.pid} className="table-row">
+                <td className="px-4 py-3 font-mono text-xs text-zinc-500">{p.pid}</td>
+                <td className="px-4 py-3 font-medium text-zinc-200">{p.name}</td>
+                <td className="px-4 py-3 text-zinc-500">{p.status}</td>
+                <td className="px-4 py-3 text-right font-mono text-zinc-300">{p.cpu_percent.toFixed(1)}</td>
+                <td className="px-4 py-3 text-right font-mono text-xs text-zinc-400">{bytes(p.memory_rss_bytes)}</td>
+                <td className="px-4 py-3 font-mono text-xs text-zinc-500 max-w-xs truncate">{p.cmdline || "—"}</td>
               </tr>
             ))}
           </tbody>
