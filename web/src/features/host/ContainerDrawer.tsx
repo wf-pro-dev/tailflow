@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { MetricChart } from "@/components/MetricChart";
 
 interface Props {
   host: string;
@@ -106,10 +107,19 @@ interface StatsData {
   block_write_bytes?: number;
 }
 
+interface StatsHistory {
+  t: number[];
+  cpu: number[];
+  mem: number[];
+  netRx: number[];
+  netTx: number[];
+}
+
 function StatsPanel({ host, containerID }: { host: string; containerID: string }) {
   const [stats, setStats] = useState<StatsData | null>(null);
   const [connected, setConnected] = useState(false);
-  const [history, setHistory] = useState<number[]>([]);
+  const [history, setHistory] = useState<StatsHistory>({ t: [], cpu: [], mem: [], netRx: [], netTx: [] });
+  const sampleCount = useRef(0);
 
   useEffect(() => {
     const url = `/api/v1/hosts/${encodeURIComponent(host)}/docker/containers/${containerID}/stats`;
@@ -123,9 +133,17 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
         const data = JSON.parse(e.data);
         const extracted = extractStats(data);
         setStats(extracted);
+        sampleCount.current++;
+        const t = sampleCount.current;
         setHistory((h) => {
-          const next = [...h, extracted.cpu_percent ?? 0];
-          if (next.length > 60) next.shift();
+          const MAX = 120;
+          const next = {
+            t: [...h.t, t].slice(-MAX),
+            cpu: [...h.cpu, extracted.cpu_percent ?? 0].slice(-MAX),
+            mem: [...h.mem, extracted.mem_pct ?? 0].slice(-MAX),
+            netRx: [...h.netRx, extracted.net_rx_bytes ?? 0].slice(-MAX),
+            netTx: [...h.netTx, extracted.net_tx_bytes ?? 0].slice(-MAX),
+          };
           return next;
         });
       } catch {
@@ -138,6 +156,7 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
 
   return (
     <div className="space-y-4">
+      {/* Live indicator */}
       <div className="flex items-center gap-2 text-sm">
         <span className={`status-dot ${connected ? "status-dot-pulse status-healthy" : "status-offline"}`} />
         <span className={connected ? "text-green-400" : "text-zinc-500"}>
@@ -145,8 +164,9 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
         </span>
       </div>
 
+      {/* Current value stat cards */}
       {stats && (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <StatCard label="CPU" value={`${(stats.cpu_percent ?? 0).toFixed(1)}%`} color="text-blue-400" />
           <StatCard
             label="Memory"
@@ -161,22 +181,65 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
         </div>
       )}
 
-      {history.length > 1 && (
-        <div className="card">
-          <h3 className="mb-3 text-sm font-medium text-zinc-300">CPU History ({history.length} samples)</h3>
-          <div className="flex h-20 items-end gap-px">
-            {history.map((v, i) => (
-              <div
-                key={i}
-                className="flex-1 rounded-sm bg-blue-500/60"
-                style={{
-                  height: `${Math.max((v / Math.max(...history, 1)) * 100, 1)}%`,
-                  minHeight: "2px",
-                }}
-              />
-            ))}
+      {/* Live charts */}
+      {history.t.length > 1 && (
+        <>
+          {/* CPU chart */}
+          <div className="card">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-medium text-zinc-300">CPU</h3>
+              <span className="text-xs text-zinc-500">
+                {(history.cpu[history.cpu.length - 1] ?? 0).toFixed(1)}%
+              </span>
+            </div>
+            <MetricChart
+              t={history.t}
+              series={[{ label: "CPU %", data: history.cpu, color: "#3DA5E0" }]}
+              format={(v) => `${v.toFixed(1)}%`}
+              yMax={100}
+              type="area"
+              height={160}
+            />
           </div>
-        </div>
+
+          {/* Memory chart */}
+          <div className="card">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-medium text-zinc-300">Memory</h3>
+              <span className="text-xs text-zinc-500">
+                {(history.mem[history.mem.length - 1] ?? 0).toFixed(1)}%
+              </span>
+            </div>
+            <MetricChart
+              t={history.t}
+              series={[{ label: "Mem %", data: history.mem, color: "#6F3FE0" }]}
+              format={(v) => `${v.toFixed(1)}%`}
+              yMax={100}
+              type="area"
+              height={160}
+            />
+          </div>
+
+          {/* Network chart */}
+          <div className="card">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-medium text-zinc-300">Network I/O</h3>
+              <span className="text-xs text-zinc-500">
+                ↓ {formatBytes(history.netRx[history.netRx.length - 1])} / {" "}
+                ↑ {formatBytes(history.netTx[history.netTx.length - 1])}
+              </span>
+            </div>
+            <MetricChart
+              t={history.t}
+              series={[
+                { label: "RX", data: history.netRx, color: "#22C55E" },
+                { label: "TX", data: history.netTx, color: "#F59E0B" },
+              ]}
+              format={(v) => formatBytes(v)}
+              height={160}
+            />
+          </div>
+        </>
       )}
     </div>
   );
