@@ -38,9 +38,11 @@ func (c *Collector) runCapabilityLoop(ctx context.Context, scope client.HostScop
 
                         // Re-fetch host metadata (role, environment, etc.) from the
                         // daemon's /host endpoint. This picks up changes to host.toml
-                        // without requiring a supervisor restart.
+                        // without requiring a supervisor restart. Use UpdateHostMeta
+                        // (NOT UpdateDiscoveryFields) because /host returns the sidecar's
+                        // identity, not the machine's.
                         if fullHost, err := scope.Get(ctx); err == nil {
-                                c.store.UpdateDiscoveryFields(hostName, mapHost(fullHost, c.cfg.StreamInterval))
+                                c.store.UpdateHostMeta(hostName, mapHost(fullHost, c.cfg.StreamInterval))
                         }
 
                         ticker.Reset(capabilityProbeInterval)

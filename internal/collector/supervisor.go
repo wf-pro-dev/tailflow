@@ -41,14 +41,14 @@ func (c *Collector) runSupervisor(ctx context.Context, h client.Host) {
         // Fetch the full host metadata (role, environment, provider, instance_type,
         // tags, metadata) from the tailkitd daemon's /host endpoint. ListHosts
         // only reads the Tailscale peer cache which doesn't have operator
-        // metadata. This is the per-host enrichment recommended by tailkit's
-        // doc comment (peers.go:56-60).
+        // metadata. Use UpdateHostMeta (NOT UpdateDiscoveryFields) because the
+        // /host endpoint returns the SIDECAR's ts_ips and ts_dns_name, not the
+        // machine's — we must not overwrite those.
         if fullHost, err := scope.Get(ctx); err == nil {
-                c.store.UpdateDiscoveryFields(hostName, mapHost(fullHost, c.cfg.StreamInterval))
+                c.store.UpdateHostMeta(hostName, mapHost(fullHost, c.cfg.StreamInterval))
                 logger.Debug("host metadata enriched",
                         "role", fullHost.Role,
                         "environment", fullHost.Environment,
-                        "provider", fullHost.Provider,
                 )
         } else {
                 logger.Warn("failed to fetch host metadata", "err", err)

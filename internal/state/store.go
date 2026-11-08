@@ -166,8 +166,14 @@ func (s *Store) UpdateDiscoveryFields(name string, discovery Host) {
                 hs.host.Online = discovery.Online
                 changed = true
         }
-        if hs.host.AgentOnline != discovery.AgentOnline {
-                hs.host.AgentOnline = discovery.AgentOnline
+        // AgentOnline: only flip TO true (recovery) here, never TO false.
+        // The Tailscale peer cache can briefly report the sidecar as offline
+        // during cache refresh, which would flap the status to no-agent and
+        // back. The status loop handles the "agent gone for real" case via
+        // the stale/degraded checks on LastSampleAt. If the agent is truly
+        // gone, samples stop arriving and the host goes stale → degraded.
+        if discovery.AgentOnline && !hs.host.AgentOnline {
+                hs.host.AgentOnline = true
                 changed = true
         }
         if hs.host.Role != discovery.Role {
@@ -195,6 +201,44 @@ func (s *Store) UpdateDiscoveryFields(name string, discovery Host) {
                 changed = true
         }
         h := hs.host // copy for publish
+        hs.mu.Unlock()
+
+        if changed {
+                s.publish("hosts", "host.updated", h)
+        }
+}
+
+// UpdateHostMeta updates only the operator-metadata fields (Role, Environment,
+// Provider, InstanceType, Tags, Metadata, OS) from the daemon's /host
+// endpoint. It NEVER touches TSIPs, DNSName, Online, AgentOnline (those come
+// from the Tailscale peer cache via UpdateDiscoveryFields), and NEVER touches
+// Caps, Status, or LastSampleAt. This prevents the sidecar's identity from
+// clobbering the machine's identity (the /host endpoint returns the sidecar's
+// ts_ips and ts_dns_name, not the machine's).
+func (s *Store) UpdateHostMeta(name string, meta Host) {
+        hs := s.hostStateByName(name)
+        if hs == nil {
+                return
+        }
+        hs.mu.Lock()
+        changed := false
+        if hs.host.Role != meta.Role {
+                hs.host.Role = meta.Role
+                changed = true
+        }
+        if hs.host.Environment != meta.Environment {
+                hs.host.Environment = meta.Environment
+                changed = true
+        }
+        if hs.host.OS != meta.OS {
+                hs.host.OS = meta.OS
+                changed = true
+        }
+        if !stringsEqual(hs.host.Tags, meta.Tags) {
+                hs.host.Tags = append([]string(nil), meta.Tags...)
+                changed = true
+        }
+        h := hs.host
         hs.mu.Unlock()
 
         if changed {
