@@ -61,7 +61,6 @@ export function MetricCharts({ host: hostName }: { host: string }) {
         <div className="live-indicator">Live</div>
       </div>
 
-<<<<<<< HEAD
       {/* Bento grid: 2x2 */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* CPU */}
@@ -77,6 +76,7 @@ export function MetricCharts({ host: hostName }: { host: string }) {
             series={[{ label: "Total", data: cpu, color: "#3DA5E0" }]}
             format={(v) => percent(v, 1)}
             yMax={100}
+            type="area"
           />
         </div>
 
@@ -93,6 +93,7 @@ export function MetricCharts({ host: hostName }: { host: string }) {
             series={[{ label: "Used %", data: memPct, color: "#6F3FE0" }]}
             format={(v) => percent(v, 1)}
             yMax={100}
+            type="area"
           />
         </div>
 
@@ -161,40 +162,6 @@ export function MetricCharts({ host: hostName }: { host: string }) {
             <div className="py-8 text-center text-xs text-zinc-600">No disk data</div>
           )}
         </div>
-=======
-      <div className="card">
-        <h3 className="mb-2 text-sm font-medium text-zinc-300">CPU</h3>
-        <MetricChart
-          t={t}
-          series={[{ label: "Total", data: cpu, color: "#3DA5E0" }]}
-          format={(v) => percent(v, 1)}
-          yMax={100}
-          type="area"
-        />
-      </div>
-
-      <div className="card">
-        <h3 className="mb-2 text-sm font-medium text-zinc-300">Memory</h3>
-        <MetricChart
-          t={t}
-          series={[{ label: "Used %", data: memPct, color: "#6F3FE0" }]}
-          format={(v) => percent(v, 1)}
-          yMax={100}
-          type="area"
-        />
-      </div>
-
-      <div className="card">
-        <h3 className="mb-2 text-sm font-medium text-zinc-300">Network</h3>
-        <MetricChart
-          t={t}
-          series={[
-            { label: "RX", data: netRx, color: "#22C55E" },
-            { label: "TX", data: netTx, color: "#F59E0B" },
-          ]}
-          format={(v) => rate(v)}
-        />
->>>>>>> dd1e634 (fix: 4 bug fixes + Recharts charts + SSE-first audit)
       </div>
     </div>
   );

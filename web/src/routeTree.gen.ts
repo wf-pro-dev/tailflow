@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as HostsRouteImport } from './routes/hosts'
+import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as HostsHostRouteImport } from './routes/hosts.$host'
 import { Route as HostsHostDockerRouteImport } from './routes/hosts.$host.docker'
 import { Route as HostsHostMetricsRouteImport } from './routes/hosts.$host.metrics'
@@ -26,6 +27,11 @@ const IndexRoute = IndexRouteImport.update({
 const HostsRoute = HostsRouteImport.update({
   id: '/hosts',
   path: '/hosts',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const HostsHostRoute = HostsHostRouteImport.update({
@@ -62,6 +68,7 @@ const HostsHostSystemdRoute = HostsHostSystemdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/hosts': typeof HostsRouteWithChildren
+  '/settings': typeof SettingsRoute
   '/hosts/$host': typeof HostsHostRouteWithChildren
   '/hosts/$host/docker': typeof HostsHostDockerRoute
   '/hosts/$host/metrics': typeof HostsHostMetricsRoute
@@ -72,6 +79,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/hosts': typeof HostsRouteWithChildren
+  '/settings': typeof SettingsRoute
   '/hosts/$host': typeof HostsHostRouteWithChildren
   '/hosts/$host/docker': typeof HostsHostDockerRoute
   '/hosts/$host/metrics': typeof HostsHostMetricsRoute
@@ -83,6 +91,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/hosts': typeof HostsRouteWithChildren
+  '/settings': typeof SettingsRoute
   '/hosts/$host': typeof HostsHostRouteWithChildren
   '/hosts/$host/docker': typeof HostsHostDockerRoute
   '/hosts/$host/metrics': typeof HostsHostMetricsRoute
@@ -95,6 +104,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/hosts'
+    | '/settings'
     | '/hosts/$host'
     | '/hosts/$host/docker'
     | '/hosts/$host/metrics'
@@ -105,6 +115,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/hosts'
+    | '/settings'
     | '/hosts/$host'
     | '/hosts/$host/docker'
     | '/hosts/$host/metrics'
@@ -115,6 +126,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/hosts'
+    | '/settings'
     | '/hosts/$host'
     | '/hosts/$host/docker'
     | '/hosts/$host/metrics'
@@ -126,6 +138,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   HostsRoute: typeof HostsRouteWithChildren
+  SettingsRoute: typeof SettingsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -142,6 +155,13 @@ declare module '@tanstack/react-router' {
       path: '/hosts'
       fullPath: '/hosts'
       preLoaderRoute: typeof HostsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/hosts/$host': {
@@ -222,6 +242,7 @@ const HostsRouteWithChildren = HostsRoute._addFileChildren(HostsRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   HostsRoute: HostsRouteWithChildren,
+  SettingsRoute: SettingsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

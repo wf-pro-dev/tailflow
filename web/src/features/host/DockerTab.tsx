@@ -241,58 +241,6 @@ function StateChip({ state }: { state: string }) {
   );
 }
 
-<<<<<<< HEAD
-function ImagesTable({ host }: { host: string }) {
-  const { data, isLoading, error } = useHostDockerImages(host);
-  if (isLoading) return <div className="text-zinc-500">Loading images…</div>;
-  if (error) {
-    if ((error as any).type === "capability-unavailable") {
-      return <div className="text-amber-400">Docker is not enabled on this host.</div>;
-    }
-    return <div className="text-red-400">Error: {error.message}</div>;
-  }
-  if (!data || data.images.length === 0) {
-    return <div className="text-zinc-500">No images.</div>;
-  }
-
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-left text-xs uppercase tracking-wider text-zinc-500">
-            <th className="px-4 py-3 font-medium">Tags</th>
-            <th className="px-4 py-3 font-medium">ID</th>
-            <th className="px-4 py-3 font-medium">Size</th>
-            <th className="px-4 py-3 font-medium">Created</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.images.map((img) => (
-            <tr key={img.id} className="table-row">
-              <td className="px-4 py-3 font-mono text-xs text-zinc-300">
-                {(img.tags ?? ["<none>"]).map((t) => (
-                  <div key={t}>{t}</div>
-                ))}
-              </td>
-              <td className="px-4 py-3 font-mono text-xs text-zinc-500">
-                {img.id.replace("sha256:", "").substring(0, 12)}
-              </td>
-              <td className="px-4 py-3 text-zinc-400">
-                {img.size ? formatImageSize(img.size) : "—"}
-              </td>
-              <td className="px-4 py-3 text-zinc-500">
-                {img.created_at ? new Date(img.created_at * 1000).toLocaleDateString() : "—"}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-=======
->>>>>>> dd1e634 (fix: 4 bug fixes + Recharts charts + SSE-first audit)
 function formatImageSize(bytes: number): string {
   const units = ["B", "KB", "MB", "GB", "TB"];
   let i = 0;
