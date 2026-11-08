@@ -176,28 +176,15 @@ func (s *Store) UpdateDiscoveryFields(name string, discovery Host) {
                 hs.host.AgentOnline = true
                 changed = true
         }
-        if hs.host.Role != discovery.Role {
-                hs.host.Role = discovery.Role
-                changed = true
-        }
-        if hs.host.Environment != discovery.Environment {
-                hs.host.Environment = discovery.Environment
-                changed = true
-        }
-        if !stringsEqual(hs.host.Tags, discovery.Tags) {
-                hs.host.Tags = append([]string(nil), discovery.Tags...)
-                changed = true
-        }
+        // Role, Environment, Tags, OS are owned by UpdateHostMeta (from the
+        // daemon's /host endpoint), NOT by discovery (which only reads the
+        // Tailscale peer cache). Don't touch them here.
         if !stringsEqual(hs.host.TSIPs, discovery.TSIPs) {
                 hs.host.TSIPs = append([]string(nil), discovery.TSIPs...)
                 changed = true
         }
         if hs.host.DNSName != discovery.DNSName {
                 hs.host.DNSName = discovery.DNSName
-                changed = true
-        }
-        if hs.host.OS != discovery.OS {
-                hs.host.OS = discovery.OS
                 changed = true
         }
         h := hs.host // copy for publish
