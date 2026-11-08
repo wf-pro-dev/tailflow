@@ -6,7 +6,7 @@ import { StreamBanner } from "@/components/StreamBanner";
 import { relativeTime } from "@/lib/format";
 import type { Host } from "@/lib/api/client";
 
-export const Route = createFileRoute("/hosts")({
+export const Route = createFileRoute("/hosts/")({
   component: HostsPage,
 });
 
