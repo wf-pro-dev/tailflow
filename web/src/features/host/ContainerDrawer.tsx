@@ -164,31 +164,14 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
         </span>
       </div>
 
-      {/* Current value stat cards */}
-      {stats && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          <StatCard label="CPU" value={`${(stats.cpu_percent ?? 0).toFixed(1)}%`} color="text-blue-400" />
-          <StatCard
-            label="Memory"
-            value={formatBytes(stats.mem_used_bytes)}
-            sub={stats.mem_limit_bytes ? `/ ${formatBytes(stats.mem_limit_bytes)}` : ""}
-            color="text-purple-400"
-          />
-          <StatCard label="Net RX" value={formatBytes(stats.net_rx_bytes)} color="text-green-400" />
-          <StatCard label="Net TX" value={formatBytes(stats.net_tx_bytes)} color="text-amber-400" />
-          <StatCard label="Block Read" value={formatBytes(stats.block_read_bytes)} color="text-zinc-300" />
-          <StatCard label="Block Write" value={formatBytes(stats.block_write_bytes)} color="text-zinc-300" />
-        </div>
-      )}
-
-      {/* Live charts */}
-      {history.t.length > 1 && (
+      {/* Live charts with current value in header */}
+      {history.t.length > 1 ? (
         <>
-          {/* CPU chart */}
+          {/* CPU */}
           <div className="card">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-medium text-zinc-300">CPU</h3>
-              <span className="text-xs text-zinc-500">
+              <span className="text-lg font-bold tracking-tight text-blue-400">
                 {(history.cpu[history.cpu.length - 1] ?? 0).toFixed(1)}%
               </span>
             </div>
@@ -202,13 +185,21 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
             />
           </div>
 
-          {/* Memory chart */}
+          {/* Memory */}
           <div className="card">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-medium text-zinc-300">Memory</h3>
-              <span className="text-xs text-zinc-500">
-                {(history.mem[history.mem.length - 1] ?? 0).toFixed(1)}%
-              </span>
+              <div className="text-right">
+                <span className="text-lg font-bold tracking-tight text-purple-400">
+                  {(history.mem[history.mem.length - 1] ?? 0).toFixed(1)}%
+                </span>
+                {stats && (
+                  <div className="text-xs text-zinc-500">
+                    {formatBytes(stats.mem_used_bytes)}
+                    {stats.mem_limit_bytes ? ` / ${formatBytes(stats.mem_limit_bytes)}` : ""}
+                  </div>
+                )}
+              </div>
             </div>
             <MetricChart
               t={history.t}
@@ -220,14 +211,18 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
             />
           </div>
 
-          {/* Network chart */}
+          {/* Network */}
           <div className="card">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-medium text-zinc-300">Network I/O</h3>
-              <span className="text-xs text-zinc-500">
-                ↓ {formatBytes(history.netRx[history.netRx.length - 1])} / {" "}
-                ↑ {formatBytes(history.netTx[history.netTx.length - 1])}
-              </span>
+              <div className="flex gap-4 text-sm">
+                <span className="text-green-400">
+                  ↓ {formatBytes(history.netRx[history.netRx.length - 1])}
+                </span>
+                <span className="text-amber-400">
+                  ↑ {formatBytes(history.netTx[history.netTx.length - 1])}
+                </span>
+              </div>
             </div>
             <MetricChart
               t={history.t}
@@ -240,17 +235,11 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
             />
           </div>
         </>
+      ) : (
+        <div className="card py-12 text-center text-zinc-500">
+          <p className="text-sm">Waiting for stats data...</p>
+        </div>
       )}
-    </div>
-  );
-}
-
-function StatCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color: string }) {
-  return (
-    <div className="card">
-      <div className="metric-label">{label}</div>
-      <div className={`mt-2 text-xl font-bold tracking-tight ${color}`}>{value}</div>
-      {sub && <div className="mt-1 text-xs text-zinc-500">{sub}</div>}
     </div>
   );
 }
