@@ -216,9 +216,18 @@ type ComposeProject struct {
         ConfigFiles string `json:"config_files,omitempty"`
 }
 
+// DockerImage is one Docker image on a host.
+type DockerImage struct {
+        ID        string   `json:"id"`
+        Tags      []string `json:"tags,omitempty"`
+        Size      int64    `json:"size,omitempty"`
+        CreatedAt int64    `json:"created_at,omitempty"`
+}
+
 // ContainerInventory is the latest container/swarm/compose state for a host.
 type ContainerInventory struct {
         Containers      []Container      `json:"containers,omitempty"`
         SwarmServices   []SwarmService   `json:"swarm_services,omitempty"`
         ComposeProjects []ComposeProject `json:"compose_projects,omitempty"`
+        Images          []DockerImage    `json:"images,omitempty"`
 }

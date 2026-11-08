@@ -150,6 +150,8 @@ func (h *Handler) routeHostPath(w http.ResponseWriter, r *http.Request, path str
                 h.handleHostSwarmServices(w, r)
         case sub == "docker/compose/projects" && r.Method == http.MethodGet:
                 h.handleHostComposeProjects(w, r)
+        case sub == "docker/images" && r.Method == http.MethodGet:
+                h.handleHostDockerImages(w, r)
         default:
                 h.writeProblem(w, r, http.StatusNotFound, "not-found",
                         "Not found", "no such endpoint: "+path, host)

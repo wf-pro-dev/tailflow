@@ -89,6 +89,8 @@ export const api = {
     fetchJSON<SwarmServiceList>(`/hosts/${encodeURIComponent(host)}/docker/swarm/services`),
   hostComposeProjects: (host: string) =>
     fetchJSON<ComposeProjectList>(`/hosts/${encodeURIComponent(host)}/docker/compose/projects`),
+  hostDockerImages: (host: string) =>
+    fetchJSON<{ host: string; images: DockerImage[] }>(`/hosts/${encodeURIComponent(host)}/docker/images`),
 };
 
 // --- Domain types (mirror the OpenAPI schemas) ---
@@ -216,4 +218,11 @@ export interface ComposeProject {
 export interface ComposeProjectList {
   host: string;
   projects: ComposeProject[];
+}
+
+export interface DockerImage {
+  id: string;
+  tags?: string[];
+  size?: number;
+  created_at?: number;
 }

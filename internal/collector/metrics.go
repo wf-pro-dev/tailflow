@@ -100,6 +100,10 @@ func (c *Collector) consumeMetricsStream(ctx context.Context, scope client.HostS
                 }
                 // Update latest non-time-series observations.
                 c.store.SetLatest(hostName, mapMetricsToLatest(e.Data))
+                // Update uptime from the host info (if present).
+                if e.Data.Host != nil {
+                        c.store.SetUptime(hostName, e.Data.Host.Uptime)
+                }
                 // Reset failures on a successful sample.
                 c.store.ResetFailures(hostName)
                 return nil

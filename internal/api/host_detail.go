@@ -296,3 +296,33 @@ func contains(hay, needle string) bool {
         }
         return false
 }
+
+// --- /api/v1/hosts/{host}/docker/images -------------------------------------
+
+func (h *Handler) handleHostDockerImages(w http.ResponseWriter, r *http.Request) {
+        host := r.PathValue("host")
+        if host == "" {
+                host = pathLastSegment(r.URL.Path)
+        }
+        hh, ok := h.store.Host(host)
+        if !ok {
+                h.writeProblem(w, r, http.StatusNotFound, "host-not-found",
+                        "Host not found", "no host with that name", host)
+                return
+        }
+        if !hh.Caps.Docker {
+                reason := "not-configured"
+                if r, ok := hh.Caps.Reasons["docker"]; ok {
+                        reason = r
+                }
+                h.writeProblem(w, r, http.StatusServiceUnavailable, "capability-unavailable",
+                        "Integration not configured", "Docker is not enabled on this host: "+reason, host)
+                return
+        }
+        inv := h.store.Containers(host)
+        resp := map[string]any{
+                "host":   host,
+                "images": inv.Images,
+        }
+        writeJSON(w, http.StatusOK, resp)
+}

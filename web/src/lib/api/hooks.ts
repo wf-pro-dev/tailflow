@@ -85,4 +85,11 @@ export function useHostComposeProjects(name: string) {
   });
 }
 
+export function useHostDockerImages(name: string) {
+  return useQuery({
+    queryKey: ["docker-images", name],
+    queryFn: () => api.hostDockerImages(name),
+  });
+}
+
 export type { Host, MetricsResponse, ProcessList, PortList, ContainerList, SwarmServiceList, ComposeProjectList };

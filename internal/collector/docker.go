@@ -131,6 +131,21 @@ func (c *Collector) refetchDockerInventory(ctx context.Context, scope client.Hos
                 }
         }
 
+        // Best-effort image list.
+        if images, err := scope.Docker().Images().List(callCtx); err == nil {
+                inv.Images = make([]state.DockerImage, len(images))
+                for i, img := range images {
+                        inv.Images[i] = state.DockerImage{
+                                ID:        img.ID,
+                                Tags:      append([]string(nil), img.RepoTags...),
+                                Size:      img.Size,
+                                CreatedAt: img.Created,
+                        }
+                }
+        } else if !errors.Is(err, client.ErrPermissionDenied) && !errors.Is(err, client.ErrDockerUnavailable) {
+                logger.Debug("images list failed", "err", err)
+        }
+
         c.store.SetContainers(hostName, inv)
         return nil
 }

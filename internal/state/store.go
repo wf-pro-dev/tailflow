@@ -483,6 +483,20 @@ func (s *Store) Ports(name string) []Port {
         return out
 }
 
+// SetUptime updates the host's uptime. Called from the metrics loop when
+// a new Metrics event arrives (the gopsutil Host.InfoStat has Uptime).
+func (s *Store) SetUptime(name string, uptime uint64) {
+        hs := s.hostStateByName(name)
+        if hs == nil {
+                return
+        }
+        hs.mu.Lock()
+        if hs.host.UptimeSeconds != uptime {
+                hs.host.UptimeSeconds = uptime
+        }
+        hs.mu.Unlock()
+}
+
 // --- Docker -----------------------------------------------------------------
 
 // SetContainers replaces the container inventory for a host. Publishes
