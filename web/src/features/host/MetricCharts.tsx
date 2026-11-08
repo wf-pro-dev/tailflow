@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useHostMetrics, useHost } from "@/lib/api/hooks";
+import { useHostMetrics, useHostMetricsLatest } from "@/lib/api/hooks";
 import { useEventStream } from "@/lib/stream/useEventStream";
 import { MetricChart } from "@/components/MetricChart";
 import { percent, bytes, rate } from "@/lib/format";
@@ -13,7 +13,9 @@ const WINDOWS = [
 export function MetricCharts({ host: hostName }: { host: string }) {
   const [window, setWindow] = useState("15m");
   const { data, isLoading, error } = useHostMetrics(hostName, window);
-  const { data: hostData } = useHost(hostName);
+  // Fetch latest metrics (disks, net interfaces) from /metrics/latest —
+  // the /hosts/:host endpoint doesn't include these.
+  const { data: latestData } = useHostMetricsLatest(hostName);
 
   // Subscribe to live metrics.sample events for this host.
   useEventStream([`metrics:${hostName}`]);
@@ -39,9 +41,9 @@ export function MetricCharts({ host: hostName }: { host: string }) {
   const netRx = data.series.net_rx_bps ?? [];
   const netTx = data.series.net_tx_bps ?? [];
 
-  // Get latest disks and network interfaces from host data
-  const latestDisks = (hostData as any)?.latest?.disks ?? [];
-  const latestNetIfaces = (hostData as any)?.latest?.net_interfaces ?? [];
+  // Get latest disks and network interfaces from /metrics/latest endpoint
+  const latestDisks = (latestData as any)?.disks ?? [];
+  const latestNetIfaces = (latestData as any)?.net_interfaces ?? [];
 
   return (
     <div className="space-y-4">

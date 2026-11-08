@@ -50,6 +50,13 @@ export function useHostMetrics(name: string, window: string = "15m") {
   });
 }
 
+export function useHostMetricsLatest(name: string) {
+  return useQuery({
+    queryKey: ["metrics-latest", name],
+    queryFn: () => api.hostMetricsLatest(name),
+  });
+}
+
 export function useHostProcesses(name: string, sort: string = "cpu") {
   return useQuery({
     queryKey: queryKeys.processes(name),
