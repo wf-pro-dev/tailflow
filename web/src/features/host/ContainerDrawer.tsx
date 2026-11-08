@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 interface Props {
@@ -13,24 +13,35 @@ export function ContainerDrawer({ host, containerID, onClose }: Props) {
   const [sub, setSub] = useState<SubTab>("overview");
 
   return (
-    <div className="fixed inset-y-0 right-0 w-full max-w-2xl bg-white shadow-xl dark:bg-gray-900 flex flex-col">
-      <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-800">
+    <div className="fixed inset-y-0 right-0 z-50 flex w-full max-w-2xl flex-col bg-[#09090B] shadow-2xl"
+      style={{ animation: "slide-in-right 0.3s ease-out" }}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-white/[0.04] px-5 py-4">
         <div className="flex gap-1">
           {(["overview", "stats", "logs"] as const).map((s) => (
             <button
               key={s}
               onClick={() => setSub(s)}
-              className={`btn capitalize ${sub === s ? "bg-blue-600 text-white dark:bg-blue-600 dark:text-white" : ""}`}
+              className={sub === s ? "tab-item-active" : "tab-item"}
             >
               {s}
             </button>
           ))}
         </div>
-        <button onClick={onClose} className="btn" aria-label="Close drawer">
-          ✕
+        <button
+          onClick={onClose}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-300 transition-colors"
+          aria-label="Close"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
         </button>
       </div>
-      <div className="flex-1 overflow-auto p-4">
+
+      {/* Content */}
+      <div className="flex-1 overflow-auto p-5">
         {sub === "overview" && <OverviewPanel host={host} containerID={containerID} />}
         {sub === "stats" && <StatsPanel host={host} containerID={containerID} />}
         {sub === "logs" && <LogViewer host={host} containerID={containerID} />}
@@ -43,8 +54,8 @@ export function ContainerDrawer({ host, containerID, onClose }: Props) {
 
 function OverviewPanel({ host, containerID }: { host: string; containerID: string }) {
   const { data, isLoading, error } = useContainerInspect(host, containerID);
-  if (isLoading) return <div className="text-gray-500">Loading…</div>;
-  if (error) return <div className="text-red-600">Error: {error.message}</div>;
+  if (isLoading) return <div className="text-zinc-500">Loading…</div>;
+  if (error) return <div className="text-red-400">Error: {error.message}</div>;
   if (!data) return null;
 
   return (
@@ -58,12 +69,12 @@ function OverviewPanel({ host, containerID }: { host: string; containerID: strin
       {data.command && <Row label="Command" value={data.command} mono />}
       {data.created_at && <Row label="Created" value={new Date(data.created_at).toLocaleString()} />}
       {data.labels && Object.keys(data.labels).length > 0 && (
-        <div>
-          <div className="text-xs font-medium uppercase text-gray-500 dark:text-gray-400">Labels</div>
-          <div className="mt-1 space-y-1">
+        <div className="pt-3 border-t border-white/[0.04]">
+          <div className="metric-label mb-2">Labels</div>
+          <div className="space-y-1">
             {Object.entries(data.labels).map(([k, v]) => (
               <div key={k} className="font-mono text-xs">
-                <span className="text-gray-500 dark:text-gray-400">{k}</span>: {v}
+                <span className="text-zinc-500">{k}</span>: <span className="text-zinc-300">{v}</span>
               </div>
             ))}
           </div>
@@ -75,9 +86,9 @@ function OverviewPanel({ host, containerID }: { host: string; containerID: strin
 
 function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="flex gap-2">
-      <div className="w-24 text-xs font-medium uppercase text-gray-500 dark:text-gray-400">{label}</div>
-      <div className={`flex-1 ${mono ? "font-mono text-xs" : ""}`}>{value}</div>
+    <div className="flex gap-3">
+      <div className="w-24 shrink-0 text-xs font-medium uppercase tracking-wider text-zinc-500">{label}</div>
+      <div className={`flex-1 ${mono ? "font-mono text-xs" : ""} text-zinc-300`}>{value}</div>
     </div>
   );
 }
@@ -98,28 +109,22 @@ interface StatsData {
 function StatsPanel({ host, containerID }: { host: string; containerID: string }) {
   const [stats, setStats] = useState<StatsData | null>(null);
   const [connected, setConnected] = useState(false);
-  const [history, setHistory] = useState<StatsData[]>([]);
-  const esRef = useRef<EventSource | null>(null);
+  const [history, setHistory] = useState<number[]>([]);
 
   useEffect(() => {
     const url = `/api/v1/hosts/${encodeURIComponent(host)}/docker/containers/${containerID}/stats`;
     const es = new EventSource(url);
-    esRef.current = es;
 
     es.onopen = () => setConnected(true);
     es.onerror = () => setConnected(false);
 
-    es.addEventListener("stats.snapshot", (e) => {
+    es.addEventListener("stats.snapshot", (e: MessageEvent) => {
       try {
         const data = JSON.parse(e.data);
-        // The data is a Docker StatsResponse; we extract the key fields.
-        // The exact JSON shape depends on the Docker SDK; we do a best-effort
-        // extraction here and let the UI degrade gracefully if fields are
-        // missing.
         const extracted = extractStats(data);
         setStats(extracted);
         setHistory((h) => {
-          const next = [...h, extracted];
+          const next = [...h, extracted.cpu_percent ?? 0];
           if (next.length > 60) next.shift();
           return next;
         });
@@ -128,65 +133,191 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
       }
     });
 
-    return () => {
-      es.close();
-      esRef.current = null;
-    };
+    return () => es.close();
   }, [host, containerID]);
 
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 text-sm">
-        <span className={`status-dot ${connected ? "status-healthy" : "status-offline"}`} />
-        {connected ? "Live" : "Disconnected"}
+        <span className={`status-dot ${connected ? "status-dot-pulse status-healthy" : "status-offline"}`} />
+        <span className={connected ? "text-green-400" : "text-zinc-500"}>
+          {connected ? "Live" : "Disconnected"}
+        </span>
       </div>
+
       {stats && (
-        <div className="grid grid-cols-2 gap-4">
-          <StatCard label="CPU" value={`${(stats.cpu_percent ?? 0).toFixed(1)}%`} />
-          <StatCard label="Memory" value={formatBytes(stats.mem_used_bytes)} sub={stats.mem_limit_bytes ? `/ ${formatBytes(stats.mem_limit_bytes)}` : ""} />
-          <StatCard label="Net RX" value={formatBytes(stats.net_rx_bytes)} />
-          <StatCard label="Net TX" value={formatBytes(stats.net_tx_bytes)} />
-          <StatCard label="Block Read" value={formatBytes(stats.block_read_bytes)} />
-          <StatCard label="Block Write" value={formatBytes(stats.block_write_bytes)} />
+        <div className="grid grid-cols-2 gap-3">
+          <StatCard label="CPU" value={`${(stats.cpu_percent ?? 0).toFixed(1)}%`} color="text-blue-400" />
+          <StatCard
+            label="Memory"
+            value={formatBytes(stats.mem_used_bytes)}
+            sub={stats.mem_limit_bytes ? `/ ${formatBytes(stats.mem_limit_bytes)}` : ""}
+            color="text-purple-400"
+          />
+          <StatCard label="Net RX" value={formatBytes(stats.net_rx_bytes)} color="text-green-400" />
+          <StatCard label="Net TX" value={formatBytes(stats.net_tx_bytes)} color="text-amber-400" />
+          <StatCard label="Block Read" value={formatBytes(stats.block_read_bytes)} color="text-zinc-300" />
+          <StatCard label="Block Write" value={formatBytes(stats.block_write_bytes)} color="text-zinc-300" />
         </div>
       )}
+
       {history.length > 1 && (
         <div className="card">
-          <h3 className="mb-2 text-sm font-medium">CPU (last {history.length} samples)</h3>
-          <MiniChart data={history.map((h) => h.cpu_percent ?? 0)} />
+          <h3 className="mb-3 text-sm font-medium text-zinc-300">CPU History ({history.length} samples)</h3>
+          <div className="flex h-20 items-end gap-px">
+            {history.map((v, i) => (
+              <div
+                key={i}
+                className="flex-1 rounded-sm bg-blue-500/60"
+                style={{
+                  height: `${Math.max((v / Math.max(...history, 1)) * 100, 1)}%`,
+                  minHeight: "2px",
+                }}
+              />
+            ))}
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function StatCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color: string }) {
   return (
     <div className="card">
-      <div className="text-xs font-medium uppercase text-gray-500 dark:text-gray-400">{label}</div>
-      <div className="mt-1 text-lg font-bold">{value}</div>
-      {sub && <div className="text-xs text-gray-500 dark:text-gray-400">{sub}</div>}
+      <div className="metric-label">{label}</div>
+      <div className={`mt-2 text-xl font-bold tracking-tight ${color}`}>{value}</div>
+      {sub && <div className="mt-1 text-xs text-zinc-500">{sub}</div>}
     </div>
   );
 }
 
-function MiniChart({ data }: { data: number[] }) {
-  const max = Math.max(...data, 1);
+// --- Logs -------------------------------------------------------------------
+
+function LogViewer({ host, containerID }: { host: string; containerID: string }) {
+  const [lines, setLines] = useState<string[]>([]);
+  const [follow, setFollow] = useState(true);
+  const [filter, setFilter] = useState("");
+  const [connected, setConnected] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!follow) {
+      return;
+    }
+    const url = `/api/v1/hosts/${encodeURIComponent(host)}/docker/containers/${containerID}/logs`;
+    const es = new EventSource(url);
+
+    es.onopen = () => setConnected(true);
+    es.onerror = () => setConnected(false);
+
+    es.addEventListener("log.line", (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        const line = typeof data === "string" ? data : data?.line ?? JSON.stringify(data);
+        setLines((prev) => {
+          const next = [...prev, line];
+          if (next.length > 5000) next.shift();
+          return next;
+        });
+      } catch {
+        // ignore
+      }
+    });
+
+    return () => es.close();
+  }, [host, containerID, follow]);
+
+  // Auto-scroll when following
+  useEffect(() => {
+    if (follow && containerRef.current) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    }
+  }, [lines, follow]);
+
+  const filtered = filter
+    ? lines.filter((l) => l.toLowerCase().includes(filter.toLowerCase()))
+    : lines;
+
   return (
-    <div className="flex h-16 items-end gap-px">
-      {data.map((v, i) => (
-        <div
-          key={i}
-          className="flex-1 bg-blue-500"
-          style={{ height: `${(v / max) * 100}%`, minHeight: "1px" }}
+    <div className="flex h-full flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setFollow(!follow)}
+          className={follow ? "btn-primary" : "btn-ghost"}
+        >
+          {follow ? "Following" : "Paused"}
+        </button>
+        <input
+          type="text"
+          placeholder="Filter logs..."
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          className="input flex-1"
         />
-      ))}
+        <span className={`status-dot ${connected ? "status-dot-pulse status-healthy" : "status-offline"}`} />
+      </div>
+
+      <div
+        ref={containerRef}
+        className="flex-1 overflow-auto rounded-lg border border-white/[0.04] bg-black/40 p-3 font-mono text-xs leading-relaxed text-zinc-300"
+      >
+        {filtered.length === 0 ? (
+          <div className="text-zinc-600">
+            {connected ? "Waiting for logs..." : "Disconnected"}
+          </div>
+        ) : (
+          filtered.map((line, i) => (
+            <div key={i} className="whitespace-pre-wrap break-all">
+              {line}
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="text-xs text-zinc-500">
+        {filtered.length} {filtered.length === 1 ? "line" : "lines"}
+        {filter && ` (filtered from ${lines.length})`}
+      </div>
     </div>
   );
 }
 
-// extractStats pulls the key fields from a Docker StatsResponse. The shape
-// varies by Docker version; we do a defensive best-effort extraction.
+// --- Hooks ------------------------------------------------------------------
+
+import { useQuery } from "@tanstack/react-query";
+import { api, type Container } from "@/lib/api/client";
+
+function useContainerInspect(host: string, containerID: string) {
+  return useQuery({
+    queryKey: ["container", host, containerID],
+    queryFn: () =>
+      api.hostContainers(host).then((list) => {
+        const c = list.containers.find(
+          (c: Container) => c.id === containerID || c.id.startsWith(containerID),
+        );
+        if (!c) throw new Error("Container not found");
+        return c;
+      }),
+  });
+}
+
+// --- Helpers ----------------------------------------------------------------
+
+function formatBytes(v: number | undefined): string {
+  if (v == null || isNaN(v)) return "—";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let i = 0;
+  let n = v;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  if (i === 0) return `${n} ${units[i]}`;
+  return `${n.toFixed(1)} ${units[i]}`;
+}
+
+// extractStats pulls the key fields from a Docker StatsResponse.
 function extractStats(data: any): StatsData {
   const cpu = data?.cpu_stats ?? {};
   const precpu = data?.precpu_stats ?? {};
@@ -205,10 +336,8 @@ function extractStats(data: any): StatsData {
     cpuPercent = ((cpuTotal - precpuTotal) / (sysTotal - preSysTotal)) * onlineCpus * 100;
   }
 
-  // Memory: usage - inactive_file (cache-adjusted)
   const memUsed = mem?.usage ?? 0;
   const memLimit = mem?.limit ?? 0;
-  const memPct = memLimit > 0 ? (memUsed / memLimit) * 100 : 0;
 
   // Network: sum across interfaces
   let netRx = 0, netTx = 0;
@@ -224,7 +353,7 @@ function extractStats(data: any): StatsData {
     }
   }
 
-  // Block I/O: sum io_service_bytes_recursive
+  // Block I/O
   let blockRead = 0, blockWrite = 0;
   if (Array.isArray(blkio?.io_service_bytes_recursive)) {
     for (const b of blkio.io_service_bytes_recursive) {
@@ -237,132 +366,10 @@ function extractStats(data: any): StatsData {
     cpu_percent: cpuPercent,
     mem_used_bytes: memUsed,
     mem_limit_bytes: memLimit,
-    mem_pct: memPct,
+    mem_pct: memLimit > 0 ? (memUsed / memLimit) * 100 : 0,
     net_rx_bytes: netRx,
     net_tx_bytes: netTx,
     block_read_bytes: blockRead,
     block_write_bytes: blockWrite,
   };
-}
-
-// --- Logs -------------------------------------------------------------------
-
-function LogViewer({ host, containerID }: { host: string; containerID: string }) {
-  const [lines, setLines] = useState<string[]>([]);
-  const [follow, setFollow] = useState(true);
-  const [filter, setFilter] = useState("");
-  const [connected, setConnected] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const esRef = useRef<EventSource | null>(null);
-
-  useEffect(() => {
-    if (!follow) {
-      esRef.current?.close();
-      esRef.current = null;
-      setConnected(false);
-      return;
-    }
-
-    const url = `/api/v1/hosts/${encodeURIComponent(host)}/docker/containers/${containerID}/logs`;
-    const es = new EventSource(url);
-    esRef.current = es;
-
-    es.onopen = () => setConnected(true);
-    es.onerror = () => setConnected(false);
-
-    es.addEventListener("log.line", (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        const line = typeof data === "string" ? data : data?.line ?? JSON.stringify(data);
-        setLines((prev) => {
-          const next = [...prev, line];
-          if (next.length > 5000) next.shift();
-          return next;
-        });
-      } catch {
-        // ignore
-      }
-    });
-
-    return () => {
-      es.close();
-      esRef.current = null;
-    };
-  }, [host, containerID, follow]);
-
-  // Auto-scroll to bottom when new lines arrive (if following).
-  useEffect(() => {
-    if (follow && containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-    }
-  }, [lines, follow]);
-
-  const filtered = filter ? lines.filter((l) => l.toLowerCase().includes(filter.toLowerCase())) : lines;
-
-  return (
-    <div className="flex h-full flex-col">
-      <div className="mb-2 flex items-center gap-2">
-        <button
-          onClick={() => setFollow(!follow)}
-          className={`btn ${follow ? "bg-blue-600 text-white dark:bg-blue-600 dark:text-white" : ""}`}
-        >
-          {follow ? "Following" : "Paused"}
-        </button>
-        <input
-          type="text"
-          placeholder="Filter…"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          className="input flex-1"
-        />
-        <span className={`status-dot ${connected ? "status-healthy" : "status-offline"}`} />
-      </div>
-      <div ref={containerRef} className="flex-1 overflow-auto rounded bg-gray-950 p-2 font-mono text-xs text-gray-100">
-        {filtered.length === 0 ? (
-          <div className="text-gray-500">{connected ? "Waiting for logs…" : "Disconnected"}</div>
-        ) : (
-          filtered.map((line, i) => (
-            <div key={i} className="whitespace-pre-wrap break-all">
-              {line}
-            </div>
-          ))
-        )}
-      </div>
-      <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-        {filtered.length} {filtered.length === 1 ? "line" : "lines"}
-        {filter && ` (filtered from ${lines.length})`}
-      </div>
-    </div>
-  );
-}
-
-// --- Hooks ------------------------------------------------------------------
-
-import { useQuery } from "@tanstack/react-query";
-import { api, type Container } from "@/lib/api/client";
-
-function useContainerInspect(host: string, containerID: string) {
-  return useQuery({
-    queryKey: ["container", host, containerID],
-    queryFn: () => api.hostContainers(host).then((list) => {
-      const c = list.containers.find((c: Container) => c.id === containerID || c.id.startsWith(containerID));
-      if (!c) throw new Error("Container not found");
-      return c;
-    }),
-  });
-}
-
-// --- Helpers ----------------------------------------------------------------
-
-function formatBytes(v: number | undefined): string {
-  if (v == null || isNaN(v)) return "—";
-  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
-  let i = 0;
-  let n = v;
-  while (n >= 1024 && i < units.length - 1) {
-    n /= 1024;
-    i++;
-  }
-  if (i === 0) return `${n} ${units[i]}`;
-  return `${n.toFixed(1)} ${units[i]}`;
 }
