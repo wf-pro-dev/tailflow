@@ -123,6 +123,18 @@ func (c *Collector) runStatusLoop(ctx context.Context, hostName string, logger *
                                 failures,
                                 c.cfg.DegradeThreshold,
                         )
+                        if status != h.Status {
+                                logger.Debug("status changed",
+                                        "from", h.Status,
+                                        "to", status,
+                                        "online", h.Online,
+                                        "agent_online", agentReachable,
+                                        "last_sample_at", h.LastSampleAt,
+                                        "sample_cadence", sampleCadence,
+                                        "stale_factor", c.cfg.StaleFactor,
+                                        "failures", failures,
+                                )
+                        }
                         c.store.SetStatus(hostName, status)
                         ticker.Reset(time.Second)
                 }

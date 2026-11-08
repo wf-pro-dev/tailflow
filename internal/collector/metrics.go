@@ -95,6 +95,7 @@ func (c *Collector) consumeMetricsStream(ctx context.Context, scope client.HostS
 
                 raw := mapMetricsToRaw(e.Data, c.clock.Now())
                 if samp, ok := agg.Add(raw); ok {
+                        logger.Debug("sample emitted", "t", samp.T, "cpu", samp.CPUTotal, "mem_pct", samp.MemUsedPct)
                         c.store.PushSample(hostName, samp)
                 }
                 // Update latest non-time-series observations.

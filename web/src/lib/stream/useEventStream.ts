@@ -51,6 +51,14 @@ export function useEventStream(topics: string[], enabled: boolean = true) {
     es.onopen = () => {
       setStreamStatus("open");
       failureCount.current = 0;
+      // Restore SSE-first defaults: no polling, high staleTime.
+      queryClient.setDefaultOptions({
+        queries: {
+          ...queryClient.getDefaultOptions().queries,
+          refetchInterval: false,
+          staleTime: 5 * 60 * 1000,
+        },
+      });
     };
 
     es.onerror = () => {
@@ -58,8 +66,20 @@ export function useEventStream(topics: string[], enabled: boolean = true) {
       if (failureCount.current >= 3) {
         setStreamStatus("fallback");
         es.close();
-        // Invalidate so queries start polling.
+        // Invalidate all queries so they refetch immediately, then set up
+        // a 10s polling interval as fallback (design §17.4).
         queryClient.invalidateQueries();
+        queryClient.setDefaultOptions({
+          queries: {
+            ...queryClient.getDefaultOptions().queries,
+            refetchInterval: 10_000,
+            staleTime: 0, // always refetch on interval
+          },
+        });
+        // Try to reconnect after 30s.
+        setTimeout(() => {
+          setStreamStatus("reconnecting");
+        }, 30_000);
       } else {
         setStreamStatus("reconnecting");
       }

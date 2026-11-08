@@ -122,4 +122,14 @@ func (c *Collector) probeCapabilitiesInto(ctx context.Context, scope client.Host
                         caps.SetFalse("compose", state.CapReasonNotConfigured)
                 }
         }
+
+        logger.Debug("capability probe result",
+                "metrics", caps.Metrics,
+                "docker", caps.Docker,
+                "swarm", caps.Swarm,
+                "compose", caps.Compose,
+                "reasons", caps.Reasons,
+                "docker_cfg_enabled", cfg.Enabled,
+                "docker_cfg_err", err,
+        )
 }
