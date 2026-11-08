@@ -18,7 +18,7 @@ export function FleetOverview() {
     <div className="space-y-6">
       <StreamBanner status={status} />
       <FleetSummaryCards summary={summaryQuery.data} isLoading={summaryQuery.isLoading} />
-      <div className="card">
+      <div className="card !p-0">
         <Filters filters={filters} onChange={setFilters} />
         <HostTable
           hosts={hostsQuery.data ?? []}

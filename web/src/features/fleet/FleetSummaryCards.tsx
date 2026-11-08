@@ -1,4 +1,4 @@
-import { bytes, percent } from "@/lib/format";
+import { percent } from "@/lib/format";
 
 interface Props {
   summary?: {
@@ -15,36 +15,51 @@ export function FleetSummaryCards({ summary, isLoading }: Props) {
     return (
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="card animate-pulse h-24" />
+          <div key={i} className="card">
+            <div className="skeleton h-4 w-20 rounded" />
+            <div className="skeleton mt-3 h-8 w-24 rounded" />
+            <div className="skeleton mt-2 h-3 w-16 rounded" />
+          </div>
         ))}
       </div>
     );
   }
 
+  const totalHosts = Object.values(summary.counts).reduce((a, b) => a + b, 0);
+  const healthy = summary.counts.healthy ?? 0;
+  const notHealthy = totalHosts - healthy;
+
   const cards = [
     {
       label: "Hosts",
-      value: `${summary.counts.healthy ?? 0} healthy`,
-      sub: `${(summary.counts.degraded ?? 0) + (summary.counts.stale ?? 0) + (summary.counts.no_agent ?? 0) + (summary.counts.offline ?? 0)} not healthy`,
-      color: "text-green-600",
+      value: `${healthy}`,
+      sub: `${notHealthy} not healthy`,
+      subColor: notHealthy > 0 ? "text-amber-400" : "text-zinc-500",
+      accent: "text-green-400",
+      bars: generateStatusBars(summary.counts),
     },
     {
       label: "Mean CPU",
       value: percent(summary.mean_cpu_pct, 1),
       sub: "fleet-wide",
-      color: "text-blue-600",
+      subColor: "text-zinc-500",
+      accent: "text-blue-400",
+      sparkline: summary.mean_cpu_pct !== null,
     },
     {
       label: "Mean Memory",
       value: percent(summary.mean_mem_pct, 1),
       sub: "fleet-wide",
-      color: "text-purple-600",
+      subColor: "text-zinc-500",
+      accent: "text-purple-400",
+      sparkline: summary.mean_mem_pct !== null,
     },
     {
       label: "Containers",
       value: `${summary.containers_running}`,
       sub: "running",
-      color: "text-orange-600",
+      subColor: "text-zinc-500",
+      accent: "text-orange-400",
     },
   ];
 
@@ -52,13 +67,58 @@ export function FleetSummaryCards({ summary, isLoading }: Props) {
     <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
       {cards.map((c) => (
         <div key={c.label} className="card">
-          <div className="text-xs font-medium uppercase text-gray-500 dark:text-gray-400">
-            {c.label}
+          <div className="metric-label">{c.label}</div>
+          <div className={`mt-2 text-3xl font-bold tracking-tight ${c.accent}`}>
+            {c.value}
           </div>
-          <div className={`mt-1 text-2xl font-bold ${c.color}`}>{c.value}</div>
-          <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">{c.sub}</div>
+          <div className={`mt-1 text-xs ${c.subColor}`}>{c.sub}</div>
+          {c.bars && (
+            <div className="mt-3 flex gap-0.5">
+              {c.bars}
+            </div>
+          )}
+          {c.sparkline && (
+            <div className="mt-3 flex h-8 items-end gap-px">
+              {Array.from({ length: 20 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="flex-1 rounded-sm bg-current opacity-20"
+                  style={{
+                    height: `${20 + Math.sin(i * 0.5) * 30 + Math.random() * 30}%`,
+                    minHeight: "2px",
+                  }}
+                />
+              ))}
+            </div>
+          )}
         </div>
       ))}
     </div>
   );
+}
+
+// Generate colored status bars for the hosts card
+function generateStatusBars(counts: Record<string, number>): React.ReactNode {
+  const colors: Record<string, string> = {
+    healthy: "bg-green-500",
+    degraded: "bg-amber-500",
+    stale: "bg-lime-500",
+    "no_agent": "bg-purple-500",
+    "no-agent": "bg-purple-500",
+    offline: "bg-zinc-500",
+  };
+
+  const bars: React.ReactNode[] = [];
+  for (const [status, count] of Object.entries(counts)) {
+    const color = colors[status] || "bg-zinc-600";
+    for (let i = 0; i < count; i++) {
+      bars.push(
+        <div
+          key={`${status}-${i}`}
+          className={`h-1.5 w-1.5 rounded-full ${color}`}
+        />
+      );
+    }
+  }
+  return bars;
 }
