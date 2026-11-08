@@ -66,7 +66,16 @@ func (c *Collector) runDockerLoop(ctx context.Context, scope client.HostScope, h
                 triggerRefetch()
                 return nil
         })
-        if err != nil && !errors.Is(err, context.Canceled) {
+        if err != nil {
+                if errors.Is(err, client.ErrDockerUnavailable) {
+                        // Docker was disabled after the loop started. Exit cleanly so
+                        // the errgroup doesn't cancel the metrics and ports loops.
+                        logger.Debug("docker unavailable on this host")
+                        return nil
+                }
+                if errors.Is(err, context.Canceled) {
+                        return err
+                }
                 logger.Warn("docker event stream ended", "err", err)
         }
 

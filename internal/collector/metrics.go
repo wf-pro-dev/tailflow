@@ -51,6 +51,12 @@ func (c *Collector) runMetricsLoop(ctx context.Context, scope client.HostScope, 
                         return ctx.Err()
                 }
                 if err != nil {
+                        if errors.Is(err, client.ErrMetricsUnavailable) {
+                                // Metrics is not configured on this host. Exit cleanly so
+                                // the errgroup doesn't cancel the docker and status loops.
+                                logger.Debug("metrics unavailable on this host")
+                                return nil
+                        }
                         logger.Warn("metrics stream ended", "err", err, "attempt", attempt)
                         c.store.IncFailures(hostName)
                 }
