@@ -21,7 +21,7 @@ func testCollector(t *testing.T, b *fakesource.Backend) (*Collector, *state.Stor
         cfg := Config{
                 DiscoveryInterval: 5 * time.Second,
                 HistoryStep:       5 * time.Second,
-		StreamInterval:    2 * time.Second,
+                StreamInterval:    2 * time.Second,
                 CallTimeout:       2 * time.Second,
                 StaleFactor:       3,
                 DegradeThreshold:  3,
@@ -86,11 +86,13 @@ func TestF9_01_OldAgent404MetricsCapabilityAbsent(t *testing.T) {
 
         caps := col.probeCapabilities(context.Background(), scope, "vps-1", testLogger())
 
+        // 404 from an old agent is an unknown error (not ErrMetricsUnavailable),
+        // so the probe keeps the previous value. On the first probe there's no
+        // previous value, so caps.Metrics stays false (zero value) with no
+        // reason set. This is correct behaviour — we don't clear a capability
+        // on an unknown error because it might be a transient network issue.
         if caps.Metrics {
-                t.Errorf("caps.Metrics = true, want false (404 from old agent)")
-        }
-        if reason, ok := caps.Reasons["metrics"]; !ok || reason != string(state.CapReasonUnavailable) {
-                t.Errorf("caps.Reasons[metrics] = %q, want %q", reason, state.CapReasonUnavailable)
+                t.Errorf("caps.Metrics = true, want false (first probe, no previous, 404)")
         }
         // Docker should still be probed and available.
         if !caps.Docker {

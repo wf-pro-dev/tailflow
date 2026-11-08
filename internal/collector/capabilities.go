@@ -50,68 +50,76 @@ func (c *Collector) runCapabilityLoop(ctx context.Context, scope client.HostScop
 // The probe is best-effort: a transient error leaves the previous capability
 // value in place (we only update on a definitive result).
 func (c *Collector) probeCapabilities(ctx context.Context, scope client.HostScope, hostName string, logger *slog.Logger) state.Capabilities {
+        // Start with the current caps from the store so we don't clobber a known-good
+        // value with a transient failure. The probe only updates a field when it gets
+        // a definitive answer (success or a typed "unavailable" error).
+        if existing, ok := c.store.Host(hostName); ok {
+                caps := existing.Caps
+                c.probeCapabilitiesInto(ctx, scope, hostName, logger, &caps)
+                return caps
+        }
         var caps state.Capabilities
+        c.probeCapabilitiesInto(ctx, scope, hostName, logger, &caps)
+        return caps
+}
+
+// probeCapabilitiesInto updates caps in place. It only clears a capability
+// on a definitive "not configured" signal (typed error), never on transient
+// errors (timeout, cancellation, unknown error). This prevents a brief
+// network blip from clearing capabilities that are actually fine.
+func (c *Collector) probeCapabilitiesInto(ctx context.Context, scope client.HostScope, hostName string, logger *slog.Logger, caps *state.Capabilities) {
         callCtx, cancel := context.WithTimeout(ctx, c.cfg.CallTimeout)
         defer cancel()
 
         // Metrics: probe via CPU() which returns ErrMetricsUnavailable when
-        // metrics.toml is missing. We previously used Ports(), but the tailkitd
-        // installer's skeleton metrics.toml omits the [ports] section (gap #5),
-        // so Ports() returns 503 on freshly-installed nodes even though the
-        // metrics All stream works fine. CPU() is a core metrics feature that's
-        // always enabled when metrics.toml exists.
+        // metrics.toml is missing.
         _, err := scope.Metrics().CPU(callCtx)
         switch {
         case err == nil:
                 caps.Metrics = true
+                delete(caps.Reasons, "metrics")
         case errors.Is(err, client.ErrMetricsUnavailable):
-                caps.Metrics = false
                 caps.SetFalse("metrics", state.CapReasonUnavailable)
         case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-                // Transient — leave previous value. Don't update.
+                // Transient — leave previous value.
+                logger.Debug("metrics probe transient error", "err", err)
         default:
-                // Unknown error — treat as unavailable for safety.
-                caps.Metrics = false
-                caps.SetFalse("metrics", state.CapReasonUnavailable)
+                // Unknown error — log it but DON'T clear the capability. The previous
+                // value (likely true from a successful probe) stays. Only clear on a
+                // definitive ErrMetricsUnavailable.
+                logger.Debug("metrics probe unknown error, keeping previous", "err", err)
         }
 
-        // Docker: bypass the SDK and call /integrations/docker/config directly
-        // via Backend.Do. The SDK's Docker().Config() hits /docker/config (gap
-        // #4) which doesn't exist on the daemon — it would always 404. The
-        // daemon exposes /integrations/docker/config.
+        // Docker: bypass the SDK and call /integrations/docker/config directly.
         cfg, err := fetchDockerConfig(callCtx, scope)
         switch {
         case err == nil:
                 caps.Docker = cfg.Enabled
+                delete(caps.Reasons, "docker")
                 if !cfg.Enabled {
                         caps.SetFalse("docker", state.CapReasonNotConfigured)
                 }
         case errors.Is(err, client.ErrDockerUnavailable):
-                caps.Docker = false
                 caps.SetFalse("docker", state.CapReasonNotConfigured)
         case errors.Is(err, client.ErrPermissionDenied):
-                caps.Docker = false
                 caps.SetFalse("docker", state.CapReasonPermissionDenied)
         case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-                // Transient — leave previous.
+                logger.Debug("docker probe transient error", "err", err)
         default:
-                // 404 (old agent) or other — treat as unavailable.
-                caps.Docker = false
-                caps.SetFalse("docker", state.CapReasonUnavailable)
+                logger.Debug("docker probe unknown error, keeping previous", "err", err)
         }
 
-        // Swarm and Compose: derive from the docker config's sections. Only
-        // meaningful when Docker itself is enabled.
-        if caps.Docker && cfg.Enabled {
+        // Swarm and Compose: derive from the docker config's sections.
+        if cfg.Enabled && err == nil {
                 caps.Swarm = cfg.Swarm.Enabled
+                delete(caps.Reasons, "swarm")
                 if !cfg.Swarm.Enabled {
                         caps.SetFalse("swarm", state.CapReasonNotConfigured)
                 }
                 caps.Compose = cfg.Compose.Enabled
+                delete(caps.Reasons, "compose")
                 if !cfg.Compose.Enabled {
                         caps.SetFalse("compose", state.CapReasonNotConfigured)
                 }
         }
-
-        return caps
 }
