@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useHosts } from "@/lib/api/hooks";
+import { useEventStream } from "@/lib/stream/useEventStream";
 import { MetricChart } from "@/components/MetricChart";
 import { percent, rate } from "@/lib/format";
 
@@ -11,27 +12,33 @@ interface Sample {
   netTx: number;
 }
 
-const MAX_POINTS = 180; // ~15 min at 5s step
+const MAX_POINTS = 180;
 
 export function FleetMetrics() {
   const { data: hosts } = useHosts();
   const [samples, setSamples] = useState<Sample[]>([]);
-  const esRef = useRef<EventSource | null>(null);
+  const [latest, setLatest] = useState<{ cpu: number; mem: number; rx: number; tx: number } | null>(null);
 
-  // Build the topics string from the host list
+  // Build topics: always include "fleet" so we get fleet.summary events too.
+  // The metrics.sample events for each host arrive via the shared useEventStream
+  // in FleetOverview — but we need our own listener here because FleetMetrics
+  // aggregates raw samples into a local ring buffer (not the query cache).
   const topics = useMemo(() => {
-    if (!hosts || hosts.length === 0) return [];
-    return hosts.map((h) => `metrics:${h.name}`);
-  }, [hosts]);
+    const t: string[] = [];
+    if (hosts) {
+      for (const h of hosts) {
+        t.push(`metrics:${h.name}`);
+      }
+    }
+    return t;
+  }, [hosts?.map(h => h.name).join(",")]); // stable dep on host names
 
-  // Subscribe to all hosts' metrics.sample events
   useEffect(() => {
     if (topics.length === 0) return;
 
     const topicsParam = topics.join(",");
     const url = `/api/v1/stream?topics=${encodeURIComponent(topicsParam)}`;
     const es = new EventSource(url);
-    esRef.current = es;
 
     es.addEventListener("metrics.sample", (e: MessageEvent) => {
       try {
@@ -39,9 +46,7 @@ export function FleetMetrics() {
         const t = data.t;
         if (!t) return;
 
-        // Accumulate this sample into the current time bucket
         setSamples((prev) => {
-          // If the last sample has the same timestamp, accumulate into it
           const last = prev[prev.length - 1];
           if (last && last.t === t) {
             const updated = { ...last };
@@ -53,7 +58,6 @@ export function FleetMetrics() {
             return [...prev.slice(0, -1), updated];
           }
 
-          // New time bucket
           const next = [...prev, {
             t,
             cpu: data.cpu_total ?? 0,
@@ -65,19 +69,33 @@ export function FleetMetrics() {
           if (next.length > MAX_POINTS) next.shift();
           return next;
         });
+
+        // Update latest values for at-a-glance display
+        setLatest({
+          cpu: data.cpu_total ?? 0,
+          mem: data.mem_used_pct ?? 0,
+          rx: data.net_rx_bps ?? 0,
+          tx: data.net_tx_bps ?? 0,
+        });
       } catch {
         // ignore
       }
     });
 
-    return () => {
-      es.close();
-      esRef.current = null;
-    };
+    return () => es.close();
   }, [topics.join(",")]);
 
   if (samples.length < 2) {
-    return null; // Don't render until we have enough data
+    return (
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="card">
+            <div className="skeleton h-4 w-24 rounded" />
+            <div className="skeleton mt-3 h-32 rounded" />
+          </div>
+        ))}
+      </div>
+    );
   }
 
   const t = samples.map((s) => s.t);
@@ -86,11 +104,6 @@ export function FleetMetrics() {
   const netRx = samples.map((s) => s.netRx);
   const netTx = samples.map((s) => s.netTx);
 
-  const latestCpu = cpu[cpu.length - 1] ?? 0;
-  const latestMem = mem[mem.length - 1] ?? 0;
-  const latestRx = netRx[netRx.length - 1] ?? 0;
-  const latestTx = netTx[netTx.length - 1] ?? 0;
-
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
       {/* Fleet CPU */}
@@ -98,7 +111,7 @@ export function FleetMetrics() {
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-sm font-medium text-zinc-300">Fleet CPU</h3>
           <span className="text-lg font-bold tracking-tight text-blue-400">
-            {latestCpu.toFixed(1)}%
+            {(latest?.cpu ?? 0).toFixed(1)}%
           </span>
         </div>
         <MetricChart
@@ -107,7 +120,7 @@ export function FleetMetrics() {
           format={(v) => `${v.toFixed(1)}%`}
           yMax={100}
           type="area"
-          height={140}
+          height={120}
         />
       </div>
 
@@ -116,7 +129,7 @@ export function FleetMetrics() {
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-sm font-medium text-zinc-300">Fleet Memory</h3>
           <span className="text-lg font-bold tracking-tight text-purple-400">
-            {latestMem.toFixed(1)}%
+            {(latest?.mem ?? 0).toFixed(1)}%
           </span>
         </div>
         <MetricChart
@@ -125,7 +138,7 @@ export function FleetMetrics() {
           format={(v) => `${v.toFixed(1)}%`}
           yMax={100}
           type="area"
-          height={140}
+          height={120}
         />
       </div>
 
@@ -134,8 +147,8 @@ export function FleetMetrics() {
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-sm font-medium text-zinc-300">Fleet Network</h3>
           <div className="flex gap-3 text-sm">
-            <span className="text-green-400">↓ {rate(latestRx)}</span>
-            <span className="text-amber-400">↑ {rate(latestTx)}</span>
+            <span className="text-green-400">↓ {rate(latest?.rx ?? 0)}</span>
+            <span className="text-amber-400">↑ {rate(latest?.tx ?? 0)}</span>
           </div>
         </div>
         <MetricChart
@@ -145,7 +158,7 @@ export function FleetMetrics() {
             { label: "TX", data: netTx, color: "#F59E0B" },
           ]}
           format={(v) => rate(v)}
-          height={140}
+          height={120}
         />
       </div>
     </div>

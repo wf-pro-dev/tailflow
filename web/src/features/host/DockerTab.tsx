@@ -11,7 +11,12 @@ export function DockerTab({ host }: { host: string }) {
   const [sub, setSub] = useState<SubTab>("containers");
   const [selectedContainer, setSelectedContainer] = useState<string | null>(null);
 
-  // Subscribe to docker:{host} events for live container stats + inventory changes
+  // Note: docker:{host} SSE subscription is handled by the host layout
+  // (hosts.$host.tsx) which subscribes to ["hosts"] — we don't need a
+  // separate subscription here. The container.stats events flow through
+  // the shared useEventStream in the layout and patch the query cache.
+  // However, we DO need docker:{host} for container stats. Subscribe here
+  // but only once — the useEventStream hook handles cleanup on unmount.
   useEventStream([`docker:${host}`]);
 
   return (

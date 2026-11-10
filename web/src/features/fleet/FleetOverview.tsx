@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { useFleetSummary, useHosts } from "@/lib/api/hooks";
 import { useEventStream } from "@/lib/stream/useEventStream";
 import { HostTable } from "./HostTable";
@@ -19,18 +19,17 @@ export function FleetOverview() {
   return (
     <div className="space-y-6">
       <StreamBanner status={status} />
+
+      {/* Row 1: KPI cards (Hosts, Memory, Disk) */}
       <FleetSummaryCards summary={summaryQuery.data} isLoading={summaryQuery.isLoading} />
 
-      {/* Fleet metrics + resource distribution side by side */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <FleetMetrics />
-        </div>
-        <div>
-          <ResourceDistribution summary={summaryQuery.data} />
-        </div>
-      </div>
+      {/* Row 2: Fleet metrics charts (full width, 3 columns) */}
+      <FleetMetrics />
 
+      {/* Row 3: Resource distribution + top containers */}
+      <ResourceDistribution summary={summaryQuery.data} />
+
+      {/* Row 4: Host table */}
       <div className="card !p-0">
         <Filters filters={filters} onChange={setFilters} />
         <HostTable
