@@ -9,8 +9,8 @@ interface Props {
 export function FleetSummaryCards({ summary, isLoading }: Props) {
   if (isLoading || !summary) {
     return (
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        {[0, 1, 2, 3].map((i) => (
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+        {[0, 1, 2].map((i) => (
           <div key={i} className="card">
             <div className="skeleton h-4 w-20 rounded" />
             <div className="skeleton mt-3 h-8 w-24 rounded" />
@@ -25,6 +25,13 @@ export function FleetSummaryCards({ summary, isLoading }: Props) {
   const healthy = summary.healthy_count ?? summary.counts?.healthy ?? 0;
   const notHealthy = totalHosts - healthy;
 
+  const memPct = summary.total_mem_bytes > 0
+    ? (summary.total_mem_used / summary.total_mem_bytes) * 100
+    : 0;
+  const diskPct = summary.total_disk_bytes > 0
+    ? (summary.total_disk_used / summary.total_disk_bytes) * 100
+    : 0;
+
   const cards = [
     {
       label: "Hosts",
@@ -35,36 +42,27 @@ export function FleetSummaryCards({ summary, isLoading }: Props) {
       bars: generateStatusBars(summary.counts ?? {}),
     },
     {
-      label: "Mean CPU",
-      value: percent(summary.mean_cpu_pct, 1),
-      sub: "fleet-wide",
-      subColor: "text-zinc-500",
-      accent: "text-blue-400",
-    },
-    {
       label: "Memory",
-      value: percent(summary.mean_mem_pct, 1),
+      value: percent(memPct, 1),
       sub: summary.total_mem_bytes > 0
         ? `${bytes(summary.total_mem_used)} / ${bytes(summary.total_mem_bytes)}`
-        : "fleet-wide",
+        : "—",
       subColor: "text-zinc-500",
       accent: "text-purple-400",
     },
     {
       label: "Disk",
-      value: summary.total_disk_bytes > 0
-        ? percent((summary.total_disk_used / summary.total_disk_bytes) * 100, 1)
-        : "—",
+      value: percent(diskPct, 1),
       sub: summary.total_disk_bytes > 0
         ? `${bytes(summary.total_disk_used)} / ${bytes(summary.total_disk_bytes)}`
-        : "fleet-wide",
+        : "—",
       subColor: "text-zinc-500",
       accent: "text-orange-400",
     },
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
       {cards.map((c) => (
         <div key={c.label} className="card">
           <div className="metric-label">{c.label}</div>

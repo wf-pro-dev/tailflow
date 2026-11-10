@@ -688,30 +688,39 @@ func (s *Store) FleetSummary() (counts map[Status]int, meanCPU, meanMem float64,
 }
 
 // FleetResourceSummary is the enriched fleet data for the overview page.
-// Includes total memory/disk bytes (used + total), and top-3 hosts by
-// CPU, memory, and disk usage — so the operator can see where the
-// majority of resources are consumed.
 type FleetResourceSummary struct {
-        MeanCPU         float64          `json:"mean_cpu_pct"`
-        MeanMem         float64          `json:"mean_mem_pct"`
-        TotalMemBytes   uint64           `json:"total_mem_bytes"`
-        TotalMemUsed    uint64           `json:"total_mem_used"`
-        TotalDiskBytes  uint64           `json:"total_disk_bytes"`
-        TotalDiskUsed   uint64           `json:"total_disk_used"`
-        ContainersRunning int            `json:"containers_running"`
-        HostCount       int              `json:"host_count"`
-        HealthyCount    int              `json:"healthy_count"`
-        TopCPUHosts     []HostResource   `json:"top_cpu_hosts"`
-        TopMemHosts     []HostResource   `json:"top_mem_hosts"`
-        TopDiskHosts    []HostResource   `json:"top_disk_hosts"`
+        MeanCPU           float64          `json:"mean_cpu_pct"`
+        MeanMem           float64          `json:"mean_mem_pct"`
+        TotalMemBytes     uint64           `json:"total_mem_bytes"`
+        TotalMemUsed      uint64           `json:"total_mem_used"`
+        TotalDiskBytes    uint64           `json:"total_disk_bytes"`
+        TotalDiskUsed     uint64           `json:"total_disk_used"`
+        ContainersRunning int              `json:"containers_running"`
+        HostCount         int              `json:"host_count"`
+        HealthyCount      int              `json:"healthy_count"`
+        TopCPUHosts       []HostResource   `json:"top_cpu_hosts"`
+        TopMemHosts       []HostResource   `json:"top_mem_hosts"`
+        TopDiskHosts      []HostResource   `json:"top_disk_hosts"`
+        TopContainers     []ContainerResource `json:"top_containers"`
 }
 
-// HostResource is one host's resource usage for the distribution view.
+// HostResource is one host's resource usage, including fleet-share %.
 type HostResource struct {
-        Name    string  `json:"name"`
-        CPU     float64 `json:"cpu_pct"`
-        MemPct  float64 `json:"mem_pct"`
-        DiskPct float64 `json:"disk_pct,omitempty"`
+        Name      string  `json:"name"`
+        CPU       float64 `json:"cpu_pct"`        // absolute host CPU %
+        MemPct    float64 `json:"mem_pct"`        // absolute host memory %
+        DiskPct   float64 `json:"disk_pct,omitempty"` // absolute host disk %
+        FleetShare float64 `json:"fleet_share"`   // this host's share of total fleet usage (0-100)
+}
+
+// ContainerResource is one container's resource usage across the fleet.
+type ContainerResource struct {
+        Host        string  `json:"host"`
+        ContainerID string  `json:"container_id"`
+        Name        string  `json:"name"`
+        Image       string  `json:"image"`
+        CPUPercent  float64 `json:"cpu_percent"`
+        MemUsedBytes uint64 `json:"mem_used_bytes"`
 }
 
 // FleetResourceSummary computes the enriched fleet data.
@@ -723,6 +732,18 @@ func (s *Store) FleetResourceSummary() FleetResourceSummary {
         var resources []HostResource
         healthyCount := 0
 
+        // First pass: gather raw data
+        type hostRaw struct {
+                name      string
+                cpu       float64
+                memUsed   uint64
+                memTotal  uint64
+                diskUsed  uint64
+                diskTotal uint64
+                maxDiskPct float64
+        }
+        var rawHosts []hostRaw
+
         for _, h := range hosts {
                 if h.Status == StatusHealthy {
                         healthyCount++
@@ -732,36 +753,102 @@ func (s *Store) FleetResourceSummary() FleetResourceSummary {
                         continue
                 }
 
-                // Memory totals
                 totalMem += samp.MemTotalBytes
                 totalMemUsed += samp.MemUsedBytes
 
-                // Disk totals
+                var hostDiskUsed, hostDiskTotal uint64
+                var maxDiskPct float64
                 for _, d := range latest.Disks {
                         totalDisk += d.Total
                         totalDiskUsed += d.Used
-                }
-
-                // Disk usage percentage (max across mounts)
-                var maxDiskPct float64
-                for _, d := range latest.Disks {
+                        hostDiskUsed += d.Used
+                        hostDiskTotal += d.Total
                         if d.UsedPct > maxDiskPct {
                                 maxDiskPct = d.UsedPct
                         }
                 }
 
+                rawHosts = append(rawHosts, hostRaw{
+                        name:       h.Name,
+                        cpu:        samp.CPUTotal,
+                        memUsed:    samp.MemUsedBytes,
+                        memTotal:   samp.MemTotalBytes,
+                        diskUsed:   hostDiskUsed,
+                        diskTotal:  hostDiskTotal,
+                        maxDiskPct: maxDiskPct,
+                })
+
+                _ = resources // unused now, computed below
+        }
+
+        // Compute total CPU "usage" (sum of all hosts' CPU %) for fleet-share
+        var totalCPUUsage float64
+        for _, r := range rawHosts {
+                totalCPUUsage += r.cpu
+        }
+        var totalMemUsage uint64 = totalMemUsed
+        var totalDiskUsage uint64 = totalDiskUsed
+
+        // Build HostResource with fleet-share
+        for _, r := range rawHosts {
+                var cpuShare, memShare, diskShare float64
+                if totalCPUUsage > 0 {
+                        cpuShare = (r.cpu / totalCPUUsage) * 100
+                }
+                if totalMemUsage > 0 {
+                        memShare = (float64(r.memUsed) / float64(totalMemUsage)) * 100
+                }
+                if totalDiskUsage > 0 {
+                        diskShare = (float64(r.diskUsed) / float64(totalDiskUsage)) * 100
+                }
+                // Use the max of CPU/mem/disk share as the overall fleet share
+                fleetShare := cpuShare
+                if memShare > fleetShare { fleetShare = memShare }
+                if diskShare > fleetShare { fleetShare = diskShare }
+
+                var memPct float64
+                if r.memTotal > 0 {
+                        memPct = (float64(r.memUsed) / float64(r.memTotal)) * 100
+                }
                 resources = append(resources, HostResource{
-                        Name:    h.Name,
-                        CPU:     samp.CPUTotal,
-                        MemPct:  samp.MemUsedPct,
-                        DiskPct: maxDiskPct,
+                        Name:       r.name,
+                        CPU:        r.cpu,
+                        MemPct:     memPct,
+                        DiskPct:    r.maxDiskPct,
+                        FleetShare: fleetShare,
                 })
         }
 
-        // Sort and pick top 3 by each metric
+        // Sort and pick top 3 by fleet share for each category
         topCPU := pickTop(resources, func(a, b HostResource) bool { return a.CPU > b.CPU })
         topMem := pickTop(resources, func(a, b HostResource) bool { return a.MemPct > b.MemPct })
         topDisk := pickTop(resources, func(a, b HostResource) bool { return a.DiskPct > b.DiskPct })
+
+        // Gather top containers by CPU across fleet
+        var allContainers []ContainerResource
+        for _, h := range hosts {
+                inv := s.Containers(h.Name)
+                stats := s.AllContainerStats(h.Name)
+                for _, c := range inv.Containers {
+                        if c.State != "running" {
+                                continue
+                        }
+                        cs, ok := stats[c.ID]
+                        if !ok {
+                                continue
+                        }
+                        allContainers = append(allContainers, ContainerResource{
+                                Host:         h.Name,
+                                ContainerID:  c.ID,
+                                Name:         c.Name,
+                                Image:        c.Image,
+                                CPUPercent:   cs.CPUPercent,
+                                MemUsedBytes: cs.MemUsedBytes,
+                        })
+                }
+        }
+        // Sort containers by CPU desc, take top 5
+        topContainers := pickTopContainers(allContainers, 5)
 
         return FleetResourceSummary{
                 MeanCPU:          meanCPU,
@@ -776,7 +863,22 @@ func (s *Store) FleetResourceSummary() FleetResourceSummary {
                 TopCPUHosts:      topCPU,
                 TopMemHosts:      topMem,
                 TopDiskHosts:     topDisk,
+                TopContainers:    topContainers,
         }
+}
+
+func pickTopContainers(containers []ContainerResource, n int) []ContainerResource {
+        sorted := make([]ContainerResource, len(containers))
+        copy(sorted, containers)
+        for i := 1; i < len(sorted); i++ {
+                for j := i; j > 0 && sorted[j].CPUPercent > sorted[j-1].CPUPercent; j-- {
+                        sorted[j], sorted[j-1] = sorted[j-1], sorted[j]
+                }
+        }
+        if len(sorted) > n {
+                return sorted[:n]
+        }
+        return sorted
 }
 
 func pickTop(resources []HostResource, less func(a, b HostResource) bool) []HostResource {

@@ -241,6 +241,16 @@ export interface HostResource {
   cpu_pct: number;
   mem_pct: number;
   disk_pct?: number;
+  fleet_share: number;
+}
+
+export interface ContainerResource {
+  host: string;
+  container_id: string;
+  name: string;
+  image: string;
+  cpu_percent: number;
+  mem_used_bytes: number;
 }
 
 export interface FleetSummary {
@@ -257,4 +267,5 @@ export interface FleetSummary {
   top_cpu_hosts: HostResource[];
   top_mem_hosts: HostResource[];
   top_disk_hosts: HostResource[];
+  top_containers: ContainerResource[];
 }
