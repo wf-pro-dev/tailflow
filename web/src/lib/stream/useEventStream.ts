@@ -147,17 +147,70 @@ export function useEventStream(topics: string[], enabled: boolean = true) {
     });
 
     es.addEventListener("docker.container.changed", (e: MessageEvent) => {
-      const data = safeParse<{ host: string }>(e.data);
+      const data = safeParse<{ host: string; container: any }>(e.data);
       if (data?.host) {
         queryClient.invalidateQueries({ queryKey: queryKeys.containers(data.host) });
       }
     });
 
     es.addEventListener("docker.inventory.replaced", (e: MessageEvent) => {
-      const data = safeParse<{ host: string }>(e.data);
+      const data = safeParse<{ host: string; containers: any[] }>(e.data);
       if (data?.host) {
-        queryClient.invalidateQueries({ queryKey: queryKeys.containers(data.host) });
+        // Patch the container list directly instead of invalidating
+        queryClient.setQueryData(queryKeys.containers(data.host), {
+          host: data.host,
+          containers: data.containers ?? [],
+        });
       }
+    });
+
+    // Container stats — patch individual container stats in the cache
+    es.addEventListener("container.stats", (e: MessageEvent) => {
+      const data = safeParse<{
+        host: string;
+        container_id: string;
+        cpu_percent: number;
+        mem_used_bytes: number;
+        mem_limit_bytes: number;
+        net_rx_bps: number;
+        net_tx_bps: number;
+      }>(e.data);
+      if (!data?.host || !data.container_id) return;
+
+      // Patch the container stats cache
+      queryClient.setQueryData<{ host: string; stats: Record<string, any> }>(
+        ["container-stats", data.host],
+        (old) => {
+          const stats = old?.stats ?? {};
+          stats[data.container_id] = {
+            cpu_percent: data.cpu_percent,
+            mem_used_bytes: data.mem_used_bytes,
+            mem_limit_bytes: data.mem_limit_bytes,
+            net_rx_bps: data.net_rx_bps,
+            net_tx_bps: data.net_tx_bps,
+          };
+          return { host: data.host, stats };
+        }
+      );
+    });
+
+    // Processes — patch the process list directly
+    es.addEventListener("processes.updated", (e: MessageEvent) => {
+      const data = safeParse<{ host: string; processes: any[] }>(e.data);
+      if (!data?.host) return;
+      queryClient.setQueryData(queryKeys.processes(data.host), {
+        host: data.host,
+        sort: "cpu",
+        truncated_to: data.processes?.length ?? 0,
+        processes: data.processes ?? [],
+      });
+    });
+
+    // Fleet summary — patch the fleet summary cache directly
+    es.addEventListener("fleet.summary", (e: MessageEvent) => {
+      const data = safeParse<any>(e.data);
+      if (!data) return;
+      queryClient.setQueryData(queryKeys.fleetSummary, data);
     });
 
     es.addEventListener("port.bound", (e: MessageEvent) => {

@@ -1,12 +1,8 @@
-import { percent } from "@/lib/format";
+import { percent, bytes } from "@/lib/format";
+import type { FleetSummary } from "@/lib/api/client";
 
 interface Props {
-  summary?: {
-    counts: Record<string, number>;
-    mean_cpu_pct: number | null;
-    mean_mem_pct: number | null;
-    containers_running: number;
-  };
+  summary?: FleetSummary;
   isLoading: boolean;
 }
 
@@ -25,8 +21,8 @@ export function FleetSummaryCards({ summary, isLoading }: Props) {
     );
   }
 
-  const totalHosts = Object.values(summary.counts).reduce((a, b) => a + b, 0);
-  const healthy = summary.counts.healthy ?? 0;
+  const totalHosts = summary.host_count ?? Object.values(summary.counts).reduce((a, b) => a + b, 0);
+  const healthy = summary.healthy_count ?? summary.counts.healthy ?? 0;
   const notHealthy = totalHosts - healthy;
 
   const cards = [
@@ -44,20 +40,24 @@ export function FleetSummaryCards({ summary, isLoading }: Props) {
       sub: "fleet-wide",
       subColor: "text-zinc-500",
       accent: "text-blue-400",
-      sparkline: summary.mean_cpu_pct !== null,
     },
     {
-      label: "Mean Memory",
+      label: "Memory",
       value: percent(summary.mean_mem_pct, 1),
-      sub: "fleet-wide",
+      sub: summary.total_mem_bytes > 0
+        ? `${bytes(summary.total_mem_used)} / ${bytes(summary.total_mem_bytes)}`
+        : "fleet-wide",
       subColor: "text-zinc-500",
       accent: "text-purple-400",
-      sparkline: summary.mean_mem_pct !== null,
     },
     {
-      label: "Containers",
-      value: `${summary.containers_running}`,
-      sub: "running",
+      label: "Disk",
+      value: summary.total_disk_bytes > 0
+        ? percent((summary.total_disk_used / summary.total_disk_bytes) * 100, 1)
+        : "—",
+      sub: summary.total_disk_bytes > 0
+        ? `${bytes(summary.total_disk_used)} / ${bytes(summary.total_disk_bytes)}`
+        : "fleet-wide",
       subColor: "text-zinc-500",
       accent: "text-orange-400",
     },
@@ -73,22 +73,8 @@ export function FleetSummaryCards({ summary, isLoading }: Props) {
           </div>
           <div className={`mt-1 text-xs ${c.subColor}`}>{c.sub}</div>
           {c.bars && (
-            <div className="mt-3 flex gap-0.5">
+            <div className="mt-3 flex flex-wrap gap-0.5">
               {c.bars}
-            </div>
-          )}
-          {c.sparkline && (
-            <div className="mt-3 flex h-8 items-end gap-px">
-              {Array.from({ length: 20 }).map((_, i) => (
-                <div
-                  key={i}
-                  className="flex-1 rounded-sm bg-current opacity-20"
-                  style={{
-                    height: `${20 + Math.sin(i * 0.5) * 30 + Math.random() * 30}%`,
-                    minHeight: "2px",
-                  }}
-                />
-              ))}
             </div>
           )}
         </div>
@@ -97,7 +83,6 @@ export function FleetSummaryCards({ summary, isLoading }: Props) {
   );
 }
 
-// Generate colored status bars for the hosts card
 function generateStatusBars(counts: Record<string, number>): React.ReactNode {
   const colors: Record<string, string> = {
     healthy: "bg-green-500",

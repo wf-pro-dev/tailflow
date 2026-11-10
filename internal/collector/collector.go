@@ -44,6 +44,10 @@ type Collector struct {
         supervisors map[string]context.CancelFunc // host name → cancel
         sfGroup  singleflight.Group
 
+        // SSE event throttling
+        lastFleetPublish time.Time
+        lastProcPublish  map[string]time.Time
+
         // streams is the refcounted on-demand stream manager for container
         // stats and logs (design §F7). Lazily initialised on first use.
         streams     *StreamManager
@@ -65,12 +69,13 @@ type Config struct {
 // New returns a Collector ready to Run. It does not start any goroutines.
 func New(fleet source.Fleet, store *state.Store, clock source.Clock, logger *slog.Logger, cfg Config) *Collector {
         return &Collector{
-                fleet:       fleet,
-                store:       store,
-                clock:       clock,
-                logger:      logger,
-                cfg:         cfg,
-                supervisors: make(map[string]context.CancelFunc),
+                fleet:          fleet,
+                store:          store,
+                clock:          clock,
+                logger:         logger,
+                cfg:            cfg,
+                supervisors:    make(map[string]context.CancelFunc),
+                lastProcPublish: make(map[string]time.Time),
         }
 }
 

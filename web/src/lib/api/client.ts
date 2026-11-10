@@ -50,12 +50,11 @@ export const api = {
       };
     }>("/meta"),
   fleetSummary: () =>
-    fetchJSON<{
-      counts: Record<string, number>;
-      mean_cpu_pct: number | null;
-      mean_mem_pct: number | null;
-      containers_running: number;
-    }>("/fleet/summary"),
+    fetchJSON<FleetSummary>("/fleet/summary"),
+  hostContainerStats: (host: string) =>
+    fetchJSON<{ host: string; stats: Record<string, ContainerStats> }>(
+      `/hosts/${encodeURIComponent(host)}/docker/containers/stats`
+    ),
   hosts: (params?: {
     status?: string;
     role?: string;
@@ -227,4 +226,35 @@ export interface DockerImage {
   tags?: string[];
   size?: number;
   created_at?: number;
+}
+
+export interface ContainerStats {
+  cpu_percent: number;
+  mem_used_bytes: number;
+  mem_limit_bytes: number;
+  net_rx_bps: number;
+  net_tx_bps: number;
+}
+
+export interface HostResource {
+  name: string;
+  cpu_pct: number;
+  mem_pct: number;
+  disk_pct?: number;
+}
+
+export interface FleetSummary {
+  counts: Record<string, number>;
+  mean_cpu_pct: number | null;
+  mean_mem_pct: number | null;
+  containers_running: number;
+  total_mem_bytes: number;
+  total_mem_used: number;
+  total_disk_bytes: number;
+  total_disk_used: number;
+  host_count: number;
+  healthy_count: number;
+  top_cpu_hosts: HostResource[];
+  top_mem_hosts: HostResource[];
+  top_disk_hosts: HostResource[];
 }

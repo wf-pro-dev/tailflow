@@ -18,6 +18,7 @@ import (
 
 func (h *Handler) handleFleetSummary(w http.ResponseWriter, r *http.Request) {
         counts, meanCPU, meanMem, containersRunning := h.store.FleetSummary()
+        resourceSummary := h.store.FleetResourceSummary()
         resp := map[string]any{
                 "counts": map[string]int{
                         "healthy":  counts[state.StatusHealthy],
@@ -27,9 +28,16 @@ func (h *Handler) handleFleetSummary(w http.ResponseWriter, r *http.Request) {
                         "offline":  counts[state.StatusOffline],
                 },
                 "containers_running": containersRunning,
+                "total_mem_bytes":    resourceSummary.TotalMemBytes,
+                "total_mem_used":     resourceSummary.TotalMemUsed,
+                "total_disk_bytes":   resourceSummary.TotalDiskBytes,
+                "total_disk_used":    resourceSummary.TotalDiskUsed,
+                "host_count":         resourceSummary.HostCount,
+                "healthy_count":      resourceSummary.HealthyCount,
+                "top_cpu_hosts":      resourceSummary.TopCPUHosts,
+                "top_mem_hosts":      resourceSummary.TopMemHosts,
+                "top_disk_hosts":     resourceSummary.TopDiskHosts,
         }
-        // meanCPU/meanMem are 0 when no healthy hosts; the OpenAPI schema says
-        // null in that case.
         if meanCPU == 0 && meanMem == 0 {
                 resp["mean_cpu_pct"] = nil
                 resp["mean_mem_pct"] = nil

@@ -327,6 +327,20 @@ func (h *Handler) handleHostDockerImages(w http.ResponseWriter, r *http.Request)
         writeJSON(w, http.StatusOK, resp)
 }
 
+// --- /api/v1/hosts/{host}/docker/containers/stats --------------------------
+
+func (h *Handler) handleHostAllContainerStats(w http.ResponseWriter, r *http.Request) {
+        host := r.PathValue("host")
+        if host == "" {
+                host = pathLastSegment(r.URL.Path)
+        }
+        stats := h.store.AllContainerStats(host)
+        writeJSON(w, http.StatusOK, map[string]any{
+                "host":  host,
+                "stats": stats,
+        })
+}
+
 // --- /api/v1/hosts/{host}/systemd/units -------------------------------------
 
 func (h *Handler) handleHostSystemdUnits(w http.ResponseWriter, r *http.Request) {

@@ -1,5 +1,8 @@
 import { useState } from "react";
 import { useHostContainers, useHostSwarmServices, useHostComposeProjects, useHostDockerImages } from "@/lib/api/hooks";
+import { useEventStream } from "@/lib/stream/useEventStream";
+import { useQuery } from "@tanstack/react-query";
+import { api, type ContainerStats } from "@/lib/api/client";
 import { ContainerDrawer } from "./ContainerDrawer";
 
 type SubTab = "containers" | "images" | "swarm" | "compose";
@@ -7,6 +10,9 @@ type SubTab = "containers" | "images" | "swarm" | "compose";
 export function DockerTab({ host }: { host: string }) {
   const [sub, setSub] = useState<SubTab>("containers");
   const [selectedContainer, setSelectedContainer] = useState<string | null>(null);
+
+  // Subscribe to docker:{host} events for live container stats + inventory changes
+  useEventStream([`docker:${host}`]);
 
   return (
     <div className="space-y-4">
@@ -40,6 +46,12 @@ export function DockerTab({ host }: { host: string }) {
 
 function ContainersTable({ host, onSelect }: { host: string; onSelect: (id: string) => void }) {
   const { data, isLoading, error } = useHostContainers(host);
+  // Fetch container stats (live-updated via SSE container.stats events)
+  const { data: statsData } = useQuery({
+    queryKey: ["container-stats", host],
+    queryFn: () => api.hostContainerStats(host),
+  });
+
   if (isLoading) return <div className="space-y-1">{[0,1,2,3,4].map(i => <div key={i} className="skeleton h-12 rounded-lg" />)}</div>;
   if (error) {
     if ((error as any).type === "capability-unavailable") {
@@ -51,6 +63,8 @@ function ContainersTable({ host, onSelect }: { host: string; onSelect: (id: stri
     return <div className="card py-12 text-center text-zinc-500"><p className="text-sm">No containers</p></div>;
   }
 
+  const stats = statsData?.stats ?? {};
+
   return (
     <div className="card !p-0 overflow-x-auto">
       <table className="w-full text-sm">
@@ -59,31 +73,50 @@ function ContainersTable({ host, onSelect }: { host: string; onSelect: (id: stri
             <th className="px-4 py-3 font-medium">State</th>
             <th className="px-4 py-3 font-medium">Name</th>
             <th className="px-4 py-3 font-medium">Image</th>
+            <th className="px-4 py-3 font-medium text-right">CPU</th>
+            <th className="px-4 py-3 font-medium text-right">Memory</th>
             <th className="px-4 py-3 font-medium">Status</th>
             <th className="px-4 py-3 font-medium">Ports</th>
           </tr>
         </thead>
         <tbody>
-          {data.containers.map((c) => (
-            <tr
-              key={c.id}
-              onClick={() => onSelect(c.id)}
-              className="table-row cursor-pointer"
-            >
-              <td className="px-4 py-3"><StateChip state={c.state} /></td>
-              <td className="px-4 py-3 font-medium text-zinc-200">{c.name}</td>
-              <td className="px-4 py-3 font-mono text-xs text-zinc-500">{c.image}</td>
-              <td className="px-4 py-3 text-zinc-400">{c.status || "—"}</td>
-              <td className="px-4 py-3 font-mono text-xs text-zinc-500">
-                {(c.ports ?? []).map((p, i) => (
-                  <div key={i}>
-                    {p.public ? `${p.ip || "0.0.0.0"}:${p.public}->` : ""}
-                    {p.private}/{p.proto}
-                  </div>
-                ))}
-              </td>
-            </tr>
-          ))}
+          {data.containers.map((c) => {
+            const s = stats[c.id] as ContainerStats | undefined;
+            return (
+              <tr
+                key={c.id}
+                onClick={() => onSelect(c.id)}
+                className="table-row cursor-pointer"
+              >
+                <td className="px-4 py-3"><StateChip state={c.state} /></td>
+                <td className="px-4 py-3 font-medium text-zinc-200">{c.name}</td>
+                <td className="px-4 py-3 font-mono text-xs text-zinc-500">{c.image}</td>
+                <td className="px-4 py-3 text-right font-mono text-xs">
+                  {s ? (
+                    <span className={s.cpu_percent > 50 ? "text-amber-400" : "text-zinc-300"}>
+                      {s.cpu_percent.toFixed(1)}%
+                    </span>
+                  ) : "—"}
+                </td>
+                <td className="px-4 py-3 text-right font-mono text-xs">
+                  {s ? (
+                    <span className="text-zinc-300">
+                      {formatBytes(s.mem_used_bytes)}
+                    </span>
+                  ) : "—"}
+                </td>
+                <td className="px-4 py-3 text-zinc-400">{c.status || "—"}</td>
+                <td className="px-4 py-3 font-mono text-xs text-zinc-500">
+                  {(c.ports ?? []).map((p, i) => (
+                    <div key={i}>
+                      {p.public ? `${p.ip || "0.0.0.0"}:${p.public}->` : ""}
+                      {p.private}/{p.proto}
+                    </div>
+                  ))}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       <div className="border-t border-white/[0.04] px-4 py-2 text-xs text-zinc-500">

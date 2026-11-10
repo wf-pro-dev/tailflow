@@ -1,8 +1,12 @@
 import { useHostProcesses } from "@/lib/api/hooks";
+import { useEventStream } from "@/lib/stream/useEventStream";
 import { bytes } from "@/lib/format";
 
 export function ProcessTable({ host }: { host: string }) {
   const { data, isLoading, error } = useHostProcesses(host);
+
+  // Subscribe to metrics:{host} for live processes.updated events
+  useEventStream([`metrics:${host}`]);
 
   if (isLoading) return <div className="space-y-1">{[0,1,2,3,4].map(i => <div key={i} className="skeleton h-12 rounded-lg" />)}</div>;
   if (error) return <div className="card text-red-400">Error: {error.message}</div>;
@@ -31,7 +35,11 @@ export function ProcessTable({ host }: { host: string }) {
                 <td className="px-4 py-3 font-mono text-xs text-zinc-500">{p.pid}</td>
                 <td className="px-4 py-3 font-medium text-zinc-200">{p.name}</td>
                 <td className="px-4 py-3 text-zinc-500">{p.status}</td>
-                <td className="px-4 py-3 text-right font-mono text-zinc-300">{p.cpu_percent.toFixed(1)}</td>
+                <td className="px-4 py-3 text-right font-mono text-xs">
+                  <span className={p.cpu_percent > 50 ? "text-amber-400" : "text-zinc-300"}>
+                    {p.cpu_percent.toFixed(1)}
+                  </span>
+                </td>
                 <td className="px-4 py-3 text-right font-mono text-xs text-zinc-400">{bytes(p.memory_rss_bytes)}</td>
                 <td className="px-4 py-3 font-mono text-xs text-zinc-500 max-w-xs truncate">{p.cmdline || "—"}</td>
               </tr>

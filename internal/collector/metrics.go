@@ -99,13 +99,24 @@ func (c *Collector) consumeMetricsStream(ctx context.Context, scope client.HostS
                         c.store.PushSample(hostName, samp)
                 }
                 // Update latest non-time-series observations.
-                c.store.SetLatest(hostName, mapMetricsToLatest(e.Data))
+                latest := mapMetricsToLatest(e.Data)
+                c.store.SetLatest(hostName, latest)
                 // Update uptime from the host info (if present).
                 if e.Data.Host != nil {
                         c.store.SetUptime(hostName, e.Data.Host.Uptime)
                 }
                 // Reset failures on a successful sample.
                 c.store.ResetFailures(hostName)
+                // Publish processes.updated event (throttled to 5s).
+                if time.Since(c.lastProcPublish[hostName]) > 5*time.Second {
+                        c.lastProcPublish[hostName] = time.Now()
+                        c.store.PublishProcesses(hostName, latest.Processes)
+                }
+                // Publish fleet.summary event (throttled to 5s).
+                if time.Since(c.lastFleetPublish) > 5*time.Second {
+                        c.lastFleetPublish = time.Now()
+                        c.store.PublishFleetSummary()
+                }
                 return nil
         })
 

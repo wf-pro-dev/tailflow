@@ -47,6 +47,7 @@ type hostState struct {
         ports       map[PortKey]Port
         containers  ContainerInventory
         systemdUnits []SystemdUnit
+        containerStats map[string]ContainerStats
         status      Status
         failures    int
 }
@@ -90,6 +91,36 @@ func (s *Store) publish(topic, name string, data any) {
                 return
         }
         s.hub.Publish(HubEvent{Topic: topic, Name: name, Data: data})
+}
+
+// PublishFleetSummary computes and publishes a fleet.summary SSE event
+// on the "fleet" topic. Called by the collector (throttled to 5s).
+func (s *Store) PublishFleetSummary() {
+        summary := s.FleetResourceSummary()
+        s.publish("fleet", "fleet.summary", summary)
+}
+
+// PublishProcesses publishes a processes.updated SSE event on the
+// "metrics:{host}" topic. Called by the collector (throttled to 5s).
+func (s *Store) PublishProcesses(host string, processes []Process) {
+        s.publish("metrics:"+host, "processes.updated", map[string]any{
+                "host":       host,
+                "processes":  processes,
+        })
+}
+
+// PublishContainerStats publishes a container.stats SSE event on the
+// "docker:{host}" topic. Called by the StreamManager when stats arrive.
+func (s *Store) PublishContainerStats(host, containerID string, stats ContainerStats) {
+        s.publish("docker:"+host, "container.stats", map[string]any{
+                "host":          host,
+                "container_id":  containerID,
+                "cpu_percent":   stats.CPUPercent,
+                "mem_used_bytes": stats.MemUsedBytes,
+                "mem_limit_bytes": stats.MemLimitBytes,
+                "net_rx_bps":    stats.NetRxBps,
+                "net_tx_bps":    stats.NetTxBps,
+        })
 }
 
 // --- Host lifecycle ---------------------------------------------------------
@@ -623,7 +654,6 @@ func (s *Store) Failures(name string) int {
 // --- Fleet summary ----------------------------------------------------------
 
 // FleetSummary returns counts by status and fleet-wide CPU/memory means.
-// Mirrors the OpenAPI FleetSummary schema.
 func (s *Store) FleetSummary() (counts map[Status]int, meanCPU, meanMem float64, containersRunning int) {
         hosts := s.Hosts()
         counts = make(map[Status]int, 5)
@@ -655,6 +685,173 @@ func (s *Store) FleetSummary() (counts map[Status]int, meanCPU, meanMem float64,
                 }
         }
         return
+}
+
+// FleetResourceSummary is the enriched fleet data for the overview page.
+// Includes total memory/disk bytes (used + total), and top-3 hosts by
+// CPU, memory, and disk usage — so the operator can see where the
+// majority of resources are consumed.
+type FleetResourceSummary struct {
+        MeanCPU         float64          `json:"mean_cpu_pct"`
+        MeanMem         float64          `json:"mean_mem_pct"`
+        TotalMemBytes   uint64           `json:"total_mem_bytes"`
+        TotalMemUsed    uint64           `json:"total_mem_used"`
+        TotalDiskBytes  uint64           `json:"total_disk_bytes"`
+        TotalDiskUsed   uint64           `json:"total_disk_used"`
+        ContainersRunning int            `json:"containers_running"`
+        HostCount       int              `json:"host_count"`
+        HealthyCount    int              `json:"healthy_count"`
+        TopCPUHosts     []HostResource   `json:"top_cpu_hosts"`
+        TopMemHosts     []HostResource   `json:"top_mem_hosts"`
+        TopDiskHosts    []HostResource   `json:"top_disk_hosts"`
+}
+
+// HostResource is one host's resource usage for the distribution view.
+type HostResource struct {
+        Name    string  `json:"name"`
+        CPU     float64 `json:"cpu_pct"`
+        MemPct  float64 `json:"mem_pct"`
+        DiskPct float64 `json:"disk_pct,omitempty"`
+}
+
+// FleetResourceSummary computes the enriched fleet data.
+func (s *Store) FleetResourceSummary() FleetResourceSummary {
+        hosts := s.Hosts()
+        _, meanCPU, meanMem, containersRunning := s.FleetSummary()
+
+        var totalMem, totalMemUsed, totalDisk, totalDiskUsed uint64
+        var resources []HostResource
+        healthyCount := 0
+
+        for _, h := range hosts {
+                if h.Status == StatusHealthy {
+                        healthyCount++
+                }
+                samp, latest, ok := s.Latest(h.Name)
+                if !ok {
+                        continue
+                }
+
+                // Memory totals
+                totalMem += samp.MemTotalBytes
+                totalMemUsed += samp.MemUsedBytes
+
+                // Disk totals
+                for _, d := range latest.Disks {
+                        totalDisk += d.Total
+                        totalDiskUsed += d.Used
+                }
+
+                // Disk usage percentage (max across mounts)
+                var maxDiskPct float64
+                for _, d := range latest.Disks {
+                        if d.UsedPct > maxDiskPct {
+                                maxDiskPct = d.UsedPct
+                        }
+                }
+
+                resources = append(resources, HostResource{
+                        Name:    h.Name,
+                        CPU:     samp.CPUTotal,
+                        MemPct:  samp.MemUsedPct,
+                        DiskPct: maxDiskPct,
+                })
+        }
+
+        // Sort and pick top 3 by each metric
+        topCPU := pickTop(resources, func(a, b HostResource) bool { return a.CPU > b.CPU })
+        topMem := pickTop(resources, func(a, b HostResource) bool { return a.MemPct > b.MemPct })
+        topDisk := pickTop(resources, func(a, b HostResource) bool { return a.DiskPct > b.DiskPct })
+
+        return FleetResourceSummary{
+                MeanCPU:          meanCPU,
+                MeanMem:          meanMem,
+                TotalMemBytes:    totalMem,
+                TotalMemUsed:     totalMemUsed,
+                TotalDiskBytes:   totalDisk,
+                TotalDiskUsed:    totalDiskUsed,
+                ContainersRunning: containersRunning,
+                HostCount:        len(hosts),
+                HealthyCount:     healthyCount,
+                TopCPUHosts:      topCPU,
+                TopMemHosts:      topMem,
+                TopDiskHosts:     topDisk,
+        }
+}
+
+func pickTop(resources []HostResource, less func(a, b HostResource) bool) []HostResource {
+        if len(resources) <= 3 {
+                out := make([]HostResource, len(resources))
+                copy(out, resources)
+                // Sort
+                for i := 1; i < len(out); i++ {
+                        for j := i; j > 0 && less(out[j], out[j-1]); j-- {
+                                out[j], out[j-1] = out[j-1], out[j]
+                        }
+                }
+                return out
+        }
+        // Sort all, take top 3
+        sorted := make([]HostResource, len(resources))
+        copy(sorted, resources)
+        for i := 1; i < len(sorted); i++ {
+                for j := i; j > 0 && less(sorted[j], sorted[j-1]); j-- {
+                        sorted[j], sorted[j-1] = sorted[j-1], sorted[j]
+                }
+        }
+        return sorted[:3]
+}
+
+// --- Per-container stats ---------------------------------------------------
+
+// ContainerStats is the latest per-container stats (for reactive table cells).
+type ContainerStats struct {
+        CPUPercent  float64 `json:"cpu_percent"`
+        MemUsedBytes uint64 `json:"mem_used_bytes"`
+        MemLimitBytes uint64 `json:"mem_limit_bytes"`
+        NetRxBps    float64 `json:"net_rx_bps"`
+        NetTxBps    float64 `json:"net_tx_bps"`
+}
+
+// SetContainerStats stores the latest stats for a specific container.
+func (s *Store) SetContainerStats(host, containerID string, stats ContainerStats) {
+        hs := s.hostStateByName(host)
+        if hs == nil {
+                return
+        }
+        hs.mu.Lock()
+        if hs.containerStats == nil {
+                hs.containerStats = make(map[string]ContainerStats)
+        }
+        hs.containerStats[containerID] = stats
+        hs.mu.Unlock()
+}
+
+// ContainerStats returns the latest stats for a specific container.
+func (s *Store) ContainerStats(host, containerID string) (ContainerStats, bool) {
+        hs := s.hostStateByName(host)
+        if hs == nil {
+                return ContainerStats{}, false
+        }
+        hs.mu.RLock()
+        defer hs.mu.RUnlock()
+        stats, ok := hs.containerStats[containerID]
+        return stats, ok
+}
+
+// AllContainerStats returns all container stats for a host.
+func (s *Store) AllContainerStats(host string) map[string]ContainerStats {
+        hs := s.hostStateByName(host)
+        if hs == nil {
+                return nil
+        }
+        hs.mu.RLock()
+        defer hs.mu.RUnlock()
+        out := make(map[string]ContainerStats, len(hs.containerStats))
+        for k, v := range hs.containerStats {
+                out[k] = v
+        }
+        return out
 }
 
 // --- helpers ----------------------------------------------------------------

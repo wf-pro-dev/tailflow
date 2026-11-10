@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useFleetSummary, useHosts } from "@/lib/api/hooks";
 import { useEventStream } from "@/lib/stream/useEventStream";
 import { HostTable } from "./HostTable";
 import { FleetSummaryCards } from "./FleetSummaryCards";
 import { FleetMetrics } from "./FleetMetrics";
+import { ResourceDistribution } from "./ResourceDistribution";
 import { Filters } from "./Filters";
 import { StreamBanner } from "@/components/StreamBanner";
 
@@ -12,16 +13,23 @@ export function FleetOverview() {
   const hostsQuery = useHosts(filters);
   const summaryQuery = useFleetSummary();
 
-  // Subscribe to host.updated and host.removed events.
-  const { status } = useEventStream(["hosts"]);
+  // Subscribe to host events + fleet summary events
+  const { status } = useEventStream(["hosts", "fleet"]);
 
   return (
     <div className="space-y-6">
       <StreamBanner status={status} />
       <FleetSummaryCards summary={summaryQuery.data} isLoading={summaryQuery.isLoading} />
 
-      {/* Fleet-level live metrics charts */}
-      <FleetMetrics />
+      {/* Fleet metrics + resource distribution side by side */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <FleetMetrics />
+        </div>
+        <div>
+          <ResourceDistribution summary={summaryQuery.data} />
+        </div>
+      </div>
 
       <div className="card !p-0">
         <Filters filters={filters} onChange={setFilters} />

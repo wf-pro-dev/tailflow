@@ -26,6 +26,8 @@ import (
 
         "github.com/docker/docker/api/types/container"
         "github.com/wf-pro-dev/tailkit/client"
+
+        "github.com/wf-pro-dev/tailflow/internal/state"
 )
 
 const (
@@ -264,8 +266,11 @@ func (m *StreamManager) closeUpstream(key streamKey) {
 }
 
 // runStatsStream opens the tailkitd stats stream and fans out events.
+// Also stores per-container stats in the store and publishes container.stats
+// SSE events for reactive table cells.
 func (m *StreamManager) runStatsStream(ctx context.Context, scope client.HostScope, key streamKey, entry *streamEntry) {
         logger := m.logger.With("host", key.host, "container", key.containerID, "stream", "stats")
+        var lastStatsPublish time.Time
         err := scope.Docker().Container(key.containerID).StreamStats(ctx, func(e client.Event[container.StatsResponse]) error {
                 entry.mu.Lock()
                 // Store latest for replay to new subscribers.
@@ -275,12 +280,18 @@ func (m *StreamManager) runStatsStream(ctx context.Context, scope client.HostSco
                 copy(subs, entry.subs)
                 entry.mu.Unlock()
 
+                // Extract and store per-container stats (throttled to 2s)
+                if time.Since(lastStatsPublish) > 2*time.Second {
+                        lastStatsPublish = time.Now()
+                        extracted := extractContainerStats(e.Data)
+                        m.collector.store.SetContainerStats(key.host, key.containerID, extracted)
+                        m.collector.store.PublishContainerStats(key.host, key.containerID, extracted)
+                }
+
                 for _, ch := range subs {
                         select {
                         case ch <- StreamEvent{Kind: StreamStats, Data: &stats}:
                         default:
-                                // Subscriber's channel is full; drop the event (stats are
-                                // idempotent — the next one will arrive shortly).
                         }
                 }
                 return nil
@@ -327,3 +338,42 @@ func (m *StreamManager) runLogsStream(ctx context.Context, scope client.HostScop
 
 // LogLine is an alias for client.LogLine, re-exported for convenience.
 type LogLine = client.LogLine
+
+// extractContainerStats pulls key fields from a Docker StatsResponse into
+// state.ContainerStats for storage and SSE publishing.
+func extractContainerStats(data container.StatsResponse) state.ContainerStats {
+        cpu := data.CPUStats
+        precpu := data.PreCPUStats
+        mem := data.MemoryStats
+        net := data.Networks
+
+        var cpuPercent float64
+        cpuTotal := cpu.CPUUsage.TotalUsage
+        precpuTotal := precpu.CPUUsage.TotalUsage
+        sysTotal := cpu.SystemUsage
+        preSysTotal := precpu.SystemUsage
+        onlineCpus := cpu.OnlineCPUs
+        if onlineCpus == 0 {
+                onlineCpus = 1
+        }
+        if sysTotal > preSysTotal && cpuTotal > precpuTotal {
+                cpuPercent = float64(cpuTotal-precpuTotal) / float64(sysTotal-preSysTotal) * float64(onlineCpus) * 100
+        }
+
+        memUsed := mem.Usage
+        memLimit := mem.Limit
+
+        var netRx, netTx float64
+        for _, n := range net {
+                netRx += float64(n.RxBytes)
+                netTx += float64(n.TxBytes)
+        }
+
+        return state.ContainerStats{
+                CPUPercent:    cpuPercent,
+                MemUsedBytes:  memUsed,
+                MemLimitBytes: memLimit,
+                NetRxBps:      netRx,
+                NetTxBps:      netTx,
+        }
+}

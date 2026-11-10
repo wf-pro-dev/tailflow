@@ -69,6 +69,7 @@ export function MetricChart({ t, series, format, yMax, height = 200, type = "lin
               stroke={s.color}
               fill={s.color}
               fillOpacity={0.1}
+              isAnimationActive={false}
               strokeWidth={1.5}
               dot={false}
               connectNulls
@@ -106,6 +107,7 @@ export function MetricChart({ t, series, format, yMax, height = 200, type = "lin
             key={s.label}
             type="monotone"
             dataKey={s.label}
+            isAnimationActive={false}
             stroke={s.color}
             strokeWidth={1.5}
             dot={false}

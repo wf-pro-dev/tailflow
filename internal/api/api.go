@@ -144,6 +144,8 @@ func (h *Handler) routeHostPath(w http.ResponseWriter, r *http.Request, path str
                 h.handleHostPorts(w, r)
         case sub == "docker/containers" && r.Method == http.MethodGet:
                 h.handleHostContainers(w, r)
+        case sub == "docker/containers/stats" && r.Method == http.MethodGet:
+                h.handleHostAllContainerStats(w, r)
         case strings.HasPrefix(sub, "docker/containers/") && r.Method == http.MethodGet:
                 h.routeContainerPath(w, r, host, strings.TrimPrefix(sub, "docker/containers/"))
         case sub == "docker/swarm/services" && r.Method == http.MethodGet:
