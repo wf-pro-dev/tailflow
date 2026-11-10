@@ -274,6 +274,19 @@ function StateChip({ state }: { state: string }) {
   );
 }
 
+function formatBytes(v: number | undefined): string {
+  if (v == null || isNaN(v) || v === 0) return "—";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let i = 0;
+  let n = v;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  if (i === 0) return `${n} ${units[i]}`;
+  return `${n.toFixed(1)} ${units[i]}`;
+}
+
 function formatImageSize(bytes: number): string {
   const units = ["B", "KB", "MB", "GB", "TB"];
   let i = 0;
