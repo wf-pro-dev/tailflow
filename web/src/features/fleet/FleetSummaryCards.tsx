@@ -21,8 +21,8 @@ export function FleetSummaryCards({ summary, isLoading }: Props) {
     );
   }
 
-  const totalHosts = summary.host_count ?? Object.values(summary.counts).reduce((a, b) => a + b, 0);
-  const healthy = summary.healthy_count ?? summary.counts.healthy ?? 0;
+  const totalHosts = summary.host_count ?? Object.values(summary.counts ?? {}).reduce((a, b) => a + b, 0);
+  const healthy = summary.healthy_count ?? summary.counts?.healthy ?? 0;
   const notHealthy = totalHosts - healthy;
 
   const cards = [
@@ -32,7 +32,7 @@ export function FleetSummaryCards({ summary, isLoading }: Props) {
       sub: `${notHealthy} not healthy`,
       subColor: notHealthy > 0 ? "text-amber-400" : "text-zinc-500",
       accent: "text-green-400",
-      bars: generateStatusBars(summary.counts),
+      bars: generateStatusBars(summary.counts ?? {}),
     },
     {
       label: "Mean CPU",
