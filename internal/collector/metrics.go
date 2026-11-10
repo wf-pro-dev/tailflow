@@ -86,20 +86,43 @@ func (c *Collector) consumeMetricsStream(ctx context.Context, scope client.HostS
                 // Track healthy duration; reset attempt counter if we've been healthy
                 // long enough (the caller checks this).
                 *healthyFor = c.clock.Now().Sub(start)
-                if *healthyFor >= backoffResetAt {
-                        // Signal the caller to reset; we can't reset attempt directly
-                        // because it lives in the caller's scope. We use a sentinel:
-                        // set healthyFor to a value the caller recognises.
-                        // (The caller checks `healthyFor >= backoffResetAt` and resets.)
-                }
 
-                raw := mapMetricsToRaw(e.Data, c.clock.Now())
+                // Get previous latest for network rate computation
+                _, prevLatest, _ := c.store.Latest(hostName)
+                now := c.clock.Now()
+
+                raw := mapMetricsToRaw(e.Data, now)
                 if samp, ok := agg.Add(raw); ok {
                         logger.Debug("sample emitted", "t", samp.T, "cpu", samp.CPUTotal, "mem_pct", samp.MemUsedPct)
                         c.store.PushSample(hostName, samp)
                 }
                 // Update latest non-time-series observations.
                 latest := mapMetricsToLatest(e.Data)
+                // Compute per-interface network rates from previous counters
+                if len(latest.NetInterfaces) > 0 && len(prevLatest.NetInterfaces) > 0 {
+                        prevMap := make(map[string]state.NetInterfaceCounters, len(prevLatest.NetInterfaces))
+                        for _, p := range prevLatest.NetInterfaces {
+                                prevMap[p.Name] = p
+                        }
+                        now := c.clock.Now()
+                        for i := range latest.NetInterfaces {
+                                if prev, ok := prevMap[latest.NetInterfaces[i].Name]; ok {
+                                        // Need the time of the previous sample — use LastSampleAt
+                                        host, _ := c.store.Host(hostName)
+                                        if host.LastSampleAt != nil {
+                                                dt := now.Sub(*host.LastSampleAt).Seconds()
+                                                if dt > 0 {
+                                                        if latest.NetInterfaces[i].BytesRecv >= prev.BytesRecv {
+                                                                latest.NetInterfaces[i].RxBps = float64(latest.NetInterfaces[i].BytesRecv-prev.BytesRecv) / dt
+                                                        }
+                                                        if latest.NetInterfaces[i].BytesSent >= prev.BytesSent {
+                                                                latest.NetInterfaces[i].TxBps = float64(latest.NetInterfaces[i].BytesSent-prev.BytesSent) / dt
+                                                        }
+                                                }
+                                        }
+                                }
+                        }
+                }
                 c.store.SetLatest(hostName, latest)
                 // Update uptime from the host info (if present).
                 if e.Data.Host != nil {

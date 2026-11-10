@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useHostMetrics, useHostMetricsLatest } from "@/lib/api/hooks";
-import { useEventStream } from "@/lib/stream/useEventStream";
 import { MetricChart } from "@/components/MetricChart";
 import { percent, bytes, rate } from "@/lib/format";
 
@@ -17,8 +16,7 @@ export function MetricCharts({ host: hostName }: { host: string }) {
   // the /hosts/:host endpoint doesn't include these.
   const { data: latestData } = useHostMetricsLatest(hostName);
 
-  // Subscribe to live metrics.sample events for this host.
-  useEventStream([`metrics:${hostName}`]);
+  // SSE subscription for metrics:{host} is handled by the host layout.
 
   if (isLoading) {
     return (

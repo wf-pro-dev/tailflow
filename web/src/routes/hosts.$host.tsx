@@ -15,9 +15,12 @@ export const Route = createFileRoute("/hosts/$host")({
 
 function HostLayout() {
   const { host } = Route.useParams();
-  // Subscribe to host.updated events so the host detail page receives
-  // capability/status changes in real time (fix F5).
-  useEventStream(["hosts"]);
+  // Subscribe to ALL relevant SSE topics at startup so data flows
+  // immediately regardless of which tab is active:
+  // - hosts: host.updated/host.removed (status/capability changes)
+  // - metrics:{host}: metrics.sample + processes.updated (live metrics + process list)
+  // - docker:{host}: container.stats + docker.inventory.replaced (live container data)
+  useEventStream(["hosts", `metrics:${host}`, `docker:${host}`]);
   return (
     <div className="space-y-4">
       <HostHeader hostName={host} />

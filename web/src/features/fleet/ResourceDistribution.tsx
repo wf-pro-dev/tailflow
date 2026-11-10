@@ -17,7 +17,7 @@ export function ResourceDistribution({ summary }: Props) {
   if (!hasHostData && !hasContainerData) return null;
 
   return (
-    <div className="space-y-4">
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
       {hasHostData && (
         <div className="card">
           <h3 className="mb-4 text-sm font-medium text-zinc-300">Resource Distribution by Host</h3>

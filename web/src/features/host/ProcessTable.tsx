@@ -1,12 +1,10 @@
 import { useHostProcesses } from "@/lib/api/hooks";
-import { useEventStream } from "@/lib/stream/useEventStream";
 import { bytes } from "@/lib/format";
 
 export function ProcessTable({ host }: { host: string }) {
   const { data, isLoading, error } = useHostProcesses(host);
 
-  // Subscribe to metrics:{host} for live processes.updated events
-  useEventStream([`metrics:${host}`]);
+  // SSE subscription for metrics:{host} is handled by the host layout.
 
   if (isLoading) return <div className="space-y-1">{[0,1,2,3,4].map(i => <div key={i} className="skeleton h-12 rounded-lg" />)}</div>;
   if (error) return <div className="card text-red-400">Error: {error.message}</div>;
