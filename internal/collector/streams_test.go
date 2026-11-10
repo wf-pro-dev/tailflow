@@ -4,6 +4,7 @@ import (
         "context"
         "io"
         "sync"
+        "sync/atomic"
         "testing"
         "time"
 
@@ -43,7 +44,7 @@ func TestF7_01_RefcountingOpensOnceClosesAfterGrace(t *testing.T) {
         cfg := Config{
                 DiscoveryInterval: 5 * time.Second,
                 HistoryStep:       5 * time.Second,
-		StreamInterval:    2 * time.Second,
+                StreamInterval:    2 * time.Second,
                 CallTimeout:       2 * time.Second,
                 StaleFactor:       3,
                 DegradeThreshold:  3,
@@ -249,4 +250,125 @@ func emptyStream() (io.ReadCloser, error) {
                 w.Close()
         }()
         return r, nil
+}
+
+// TestBackgroundSubsReconcile verifies that ReconcileBackgroundSubs opens stats
+// streams for running containers and closes them when containers stop.
+func TestBackgroundSubsReconcile(t *testing.T) {
+        b := &fakesource.Backend{Script: fakesource.NewScript()}
+
+        // Script the stats stream for two containers — stays open until test ends.
+        b.Script.AddFunc("vps-1", "GET", "/integrations/docker/containers/aaa/stats", func() fakesource.Response {
+                return fakesource.Response{Stream: emptyStream}
+        })
+        b.Script.AddFunc("vps-1", "GET", "/integrations/docker/containers/bbb/stats", func() fakesource.Response {
+                return fakesource.Response{Stream: emptyStream}
+        })
+
+        store := state.New(720)
+        store.UpsertHost(state.Host{Name: "vps-1", Online: true, Status: state.StatusHealthy})
+        clk := testClock{Clock: fakesource.NewClock(time.Unix(1000, 0))}
+        fleet := fakesource.NewFleet([]client.Host{{Name: "vps-1", Online: true}}, b)
+        cfg := Config{DiscoveryInterval: 5 * time.Second, HistoryStep: 5 * time.Second, StreamInterval: 2 * time.Second, CallTimeout: 2 * time.Second, StaleFactor: 3, DegradeThreshold: 3, MaxHosts: 100}
+        col := New(fleet, store, clk, testLogger(), cfg)
+        sm := col.Streams()
+
+        ctx, cancel := context.WithCancel(context.Background())
+        defer cancel()
+
+        // Reconcile with two running containers → two background subs.
+        sm.ReconcileBackgroundSubs(ctx, "vps-1", []string{"aaa", "bbb"})
+        time.Sleep(100 * time.Millisecond) // let upstream goroutines start
+
+        sm.bgMu.Lock()
+        bgCount := len(sm.bgSubs)
+        sm.bgMu.Unlock()
+        if bgCount != 2 {
+                t.Errorf("after reconcile with 2 running: bgSubs = %d, want 2", bgCount)
+        }
+
+        // Reconcile with one container removed → one sub closed.
+        sm.ReconcileBackgroundSubs(ctx, "vps-1", []string{"aaa"})
+        time.Sleep(100 * time.Millisecond)
+
+        sm.bgMu.Lock()
+        bgCount = len(sm.bgSubs)
+        _, hasBbb := sm.bgSubs[bgSubKey{host: "vps-1", containerID: "bbb"}]
+        sm.bgMu.Unlock()
+        if bgCount != 1 {
+                t.Errorf("after reconcile with 1 running: bgSubs = %d, want 1", bgCount)
+        }
+        if hasBbb {
+                t.Errorf("bbb sub should have been closed")
+        }
+
+        // CloseBackgroundSubs clears all.
+        sm.CloseBackgroundSubs("vps-1")
+        time.Sleep(100 * time.Millisecond)
+
+        sm.bgMu.Lock()
+        bgCount = len(sm.bgSubs)
+        sm.bgMu.Unlock()
+        if bgCount != 0 {
+                t.Errorf("after CloseBackgroundSubs: bgSubs = %d, want 0", bgCount)
+        }
+}
+
+// TestBackgroundSubKeepsStreamAlive verifies that a background sub keeps the
+// upstream open even after all browser subs close. This is the core invariant
+// that makes the Docker tab show live stats without a user opening a drawer.
+func TestBackgroundSubKeepsStreamAlive(t *testing.T) {
+        b := &fakesource.Backend{Script: fakesource.NewScript()}
+
+        var openCount atomic.Int64
+        b.Script.AddFunc("vps-1", "GET", "/integrations/docker/containers/abc/stats", func() fakesource.Response {
+                openCount.Add(1)
+                return fakesource.Response{Stream: emptyStream}
+        })
+
+        store := state.New(720)
+        store.UpsertHost(state.Host{Name: "vps-1", Online: true, Status: state.StatusHealthy})
+        clk := testClock{Clock: fakesource.NewClock(time.Unix(1000, 0))}
+        fleet := fakesource.NewFleet([]client.Host{{Name: "vps-1", Online: true}}, b)
+        cfg := Config{DiscoveryInterval: 5 * time.Second, HistoryStep: 5 * time.Second, StreamInterval: 2 * time.Second, CallTimeout: 2 * time.Second, StaleFactor: 3, DegradeThreshold: 3, MaxHosts: 100}
+        col := New(fleet, store, clk, testLogger(), cfg)
+        sm := col.Streams()
+
+        ctx, cancel := context.WithCancel(context.Background())
+        defer cancel()
+
+        // Open a background sub.
+        sm.ReconcileBackgroundSubs(ctx, "vps-1", []string{"abc"})
+        time.Sleep(100 * time.Millisecond)
+        opensAfterBg := openCount.Load()
+        if opensAfterBg != 1 {
+                t.Fatalf("after background sub: upstream opens = %d, want 1", opensAfterBg)
+        }
+
+        // A browser joins (refcount 2).
+        browserSub, err := sm.Subscribe(ctx, "vps-1", "abc", StreamStats)
+        if err != nil {
+                t.Fatalf("Subscribe: %v", err)
+        }
+        time.Sleep(100 * time.Millisecond)
+        opensAfterBrowser := openCount.Load()
+        if opensAfterBrowser != 1 {
+                t.Errorf("after browser join: upstream opens = %d, want 1 (should reuse)", opensAfterBrowser)
+        }
+
+        // Browser leaves — stream should stay open (background sub still active).
+        browserSub.Close()
+        time.Sleep(100 * time.Millisecond)
+        opensAfterBrowserClose := openCount.Load()
+        if opensAfterBrowserClose != 1 {
+                t.Errorf("after browser close: upstream opens = %d, want 1 (background keeps it alive)", opensAfterBrowserClose)
+        }
+
+        // Verify the stream entry still exists (not grace-closed).
+        sm.mu.Lock()
+        entryCount := len(sm.streams)
+        sm.mu.Unlock()
+        if entryCount != 1 {
+                t.Errorf("after browser close: stream entries = %d, want 1 (background sub should keep entry)", entryCount)
+        }
 }

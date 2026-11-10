@@ -32,11 +32,22 @@ const dockerDebounce = 300 * time.Millisecond
 
 // runDockerLoop subscribes to Docker events and refetches the container
 // inventory (debounced) on relevant events. Blocks until ctx is cancelled.
+//
+// After each inventory refetch, the loop also reconciles background stats
+// subscriptions for all running containers (design §F7). This ensures the
+// Docker tab's CPU/memory columns and the fleet overview's Top Containers
+// panel are populated with live data even when no user has opened a container
+// drawer.
 func (c *Collector) runDockerLoop(ctx context.Context, scope client.HostScope, hostName string, logger *slog.Logger) error {
+        // Close all background stats subs when the loop exits (host removed or
+        // docker disabled) so upstream streams don't linger.
+        defer c.Streams().CloseBackgroundSubs(hostName)
+
         // Initial fetch.
         if err := c.refetchDockerInventory(ctx, scope, hostName, logger); err != nil {
                 logger.Warn("initial docker fetch failed", "err", err)
         }
+        c.reconcileContainerStatsSubs(ctx, hostName)
 
         // Debounce state: a timer is reset on every relevant event; when it
         // finally fires, we refetch.
@@ -53,6 +64,7 @@ func (c *Collector) runDockerLoop(ctx context.Context, scope client.HostScope, h
                         if err := c.refetchDockerInventory(ctx, scope, hostName, logger); err != nil {
                                 logger.Warn("debounced docker refetch failed", "err", err)
                         }
+                        c.reconcileContainerStatsSubs(ctx, hostName)
                 })
         }
 
@@ -170,4 +182,19 @@ func shouldRefreshDockerInventory(action string) bool {
                 // All other non-ignored actions are accepted.
                 return true
         }
+}
+
+// reconcileContainerStatsSubs ensures background stats streams are open for all
+// running containers on the host. Called after each docker inventory refetch.
+// Containers that are no longer running (or no longer exist) have their
+// background sub closed; newly-running containers get a fresh sub.
+func (c *Collector) reconcileContainerStatsSubs(ctx context.Context, hostName string) {
+        inv := c.store.Containers(hostName)
+        var running []string
+        for _, ct := range inv.Containers {
+                if ct.State == "running" {
+                        running = append(running, ct.ID)
+                }
+        }
+        c.Streams().ReconcileBackgroundSubs(ctx, hostName, running)
 }

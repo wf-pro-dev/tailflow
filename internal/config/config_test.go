@@ -13,8 +13,8 @@ func TestDefault(t *testing.T) {
 	if c.HistoryWindow != time.Hour {
 		t.Errorf("Default().HistoryWindow = %v, want 1h", c.HistoryWindow)
 	}
-	if c.StaleFactor != 3 {
-		t.Errorf("Default().StaleFactor = %d, want 3", c.StaleFactor)
+	if c.StaleFactor != 6 {
+		t.Errorf("Default().StaleFactor = %d, want 6", c.StaleFactor)
 	}
 }
 
