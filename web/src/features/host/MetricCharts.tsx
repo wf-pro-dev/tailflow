@@ -40,8 +40,8 @@ export function MetricCharts({ host: hostName }: { host: string }) {
   const netTx = data.series.net_tx_bps ?? [];
 
   // Get latest disks and network interfaces from /metrics/latest endpoint
-  const latestDisks = (latestData as any)?.disks ?? [];
-  const latestNetIfaces = (latestData as any)?.net_interfaces ?? [];
+  const latestDisks = latestData?.disks ?? [];
+  const latestNetIfaces = latestData?.net_interfaces ?? [];
 
   return (
     <div className="space-y-4">
@@ -117,7 +117,7 @@ export function MetricCharts({ host: hostName }: { host: string }) {
           {latestNetIfaces.length > 0 && (
             <div className="mt-3 space-y-1 border-t border-white/[0.04] pt-3">
               <div className="metric-label mb-2">Per Interface</div>
-              {latestNetIfaces.map((iface: any) => (
+              {latestNetIfaces.map((iface) => (
                 <div key={iface.name} className="flex items-center justify-between text-xs">
                   <span className="font-mono text-zinc-400">{iface.name}</span>
                   <span className="text-zinc-500">
@@ -138,7 +138,7 @@ export function MetricCharts({ host: hostName }: { host: string }) {
           </div>
           {latestDisks.length > 0 ? (
             <div className="space-y-3">
-              {latestDisks.map((disk: any) => (
+              {latestDisks.map((disk) => (
                 <div key={disk.path}>
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-mono text-zinc-400">{disk.path}</span>

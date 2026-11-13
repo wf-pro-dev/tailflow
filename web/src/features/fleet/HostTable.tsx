@@ -1,4 +1,4 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import type { Host } from "@/lib/api/client";
 import { StatusBadge } from "./StatusBadge";
 import { relativeTime } from "@/lib/format";
@@ -10,6 +10,8 @@ interface Props {
 }
 
 export function HostTable({ hosts, isLoading, error }: Props) {
+  const navigate = useNavigate();
+
   if (isLoading) {
     return (
       <div className="space-y-1 p-2">
@@ -63,7 +65,7 @@ export function HostTable({ hosts, isLoading, error }: Props) {
             <tr
               key={h.name}
               className="table-row cursor-pointer"
-              onClick={() => window.location.href = `/hosts/${h.name}/metrics`}
+              onClick={() => navigate({ to: "/hosts/$host/metrics", params: { host: h.name } })}
             >
               <td className="px-4 py-3">
                 <StatusBadge status={h.status} />

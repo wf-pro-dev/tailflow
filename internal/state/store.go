@@ -595,6 +595,7 @@ func (s *Store) Containers(name string) ContainerInventory {
                 Containers:      append([]Container(nil), hs.containers.Containers...),
                 SwarmServices:   append([]SwarmService(nil), hs.containers.SwarmServices...),
                 ComposeProjects: append([]ComposeProject(nil), hs.containers.ComposeProjects...),
+                Images:          append([]DockerImage(nil), hs.containers.Images...),
         }
 }
 

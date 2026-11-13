@@ -14,6 +14,8 @@ import (
         "strings"
         "time"
 
+        "github.com/wf-pro-dev/tailkit/client"
+
         hubpkg "github.com/wf-pro-dev/tailflow/internal/hub"
 )
 
@@ -177,8 +179,8 @@ func (h *Handler) handleContainerLogs(w http.ResponseWriter, r *http.Request, ho
                                 if evt.Err != nil {
                                         goto done
                                 }
-                                if line, ok := evt.Data.(string); ok {
-                                        lines = append(lines, line)
+                                if line, ok := evt.Data.(client.LogLine); ok {
+                                        lines = append(lines, line.Line)
                                 }
                         case <-timeout:
                                 goto done

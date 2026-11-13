@@ -1,8 +1,7 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useHosts } from "@/lib/api/hooks";
-import { useEventStream } from "@/lib/stream/useEventStream";
 import { MetricChart } from "@/components/MetricChart";
-import { percent, rate } from "@/lib/format";
+import { rate } from "@/lib/format";
 
 interface Sample {
   t: number;
@@ -10,6 +9,7 @@ interface Sample {
   memPct: number;
   netRx: number;
   netTx: number;
+  _count: number; // number of hosts aggregated into this bucket
 }
 
 const MAX_POINTS = 180;
@@ -50,22 +50,22 @@ export function FleetMetrics() {
           const last = prev[prev.length - 1];
           if (last && last.t === t) {
             const updated = { ...last };
-            updated.cpu = (updated.cpu * (updated._count || 1) + (data.cpu_total ?? 0)) / ((updated._count || 1) + 1);
-            updated.memPct = (updated.memPct * (updated._count || 1) + (data.mem_used_pct ?? 0)) / ((updated._count || 1) + 1);
+            updated.cpu = (updated.cpu * updated._count + (data.cpu_total ?? 0)) / (updated._count + 1);
+            updated.memPct = (updated.memPct * updated._count + (data.mem_used_pct ?? 0)) / (updated._count + 1);
             updated.netRx += data.net_rx_bps ?? 0;
             updated.netTx += data.net_tx_bps ?? 0;
-            updated._count = (updated._count || 1) + 1;
+            updated._count = updated._count + 1;
             return [...prev.slice(0, -1), updated];
           }
 
-          const next = [...prev, {
+          const next: Sample[] = [...prev, {
             t,
             cpu: data.cpu_total ?? 0,
             memPct: data.mem_used_pct ?? 0,
             netRx: data.net_rx_bps ?? 0,
             netTx: data.net_tx_bps ?? 0,
             _count: 1,
-          } as Sample & { _count: number }];
+          }];
           if (next.length > MAX_POINTS) next.shift();
           return next;
         });

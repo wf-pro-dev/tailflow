@@ -147,7 +147,7 @@ export interface LatestMetrics {
   net_rx_bps?: number | null;
   net_tx_bps?: number | null;
   disks?: { path: string; total: number; used: number; used_pct: number }[];
-  net_interfaces?: { name: string; bytes_recv: number; bytes_sent: number }[];
+  net_interfaces?: { name: string; bytes_recv: number; bytes_sent: number; rx_bps?: number; tx_bps?: number }[];
 }
 
 export interface Process {
@@ -189,6 +189,7 @@ export interface Container {
   ports?: { ip?: string; private: number; public?: number; proto?: string }[];
   created_at?: string;
   command?: string;
+  labels?: Record<string, string>;
 }
 
 export interface ContainerList {

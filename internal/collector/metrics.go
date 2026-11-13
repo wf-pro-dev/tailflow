@@ -82,6 +82,13 @@ func (c *Collector) consumeMetricsStream(ctx context.Context, scope client.HostS
         callCtx, cancel := context.WithCancel(ctx)
         defer cancel()
 
+        // prevEventAt tracks the receive time of the previous raw metrics event.
+        // We use this (not LastSampleAt) to compute per-interface rates because
+        // LastSampleAt is the timestamp of the last aggregated bucket, which
+        // lags raw events by up to HistoryStep (5s). Using it would make dt
+        // wrong by ~3s, causing rates to oscillate ~2× off.
+        var prevEventAt time.Time
+
         err := scope.Metrics().All(callCtx, func(e client.Event[client.Metrics]) error {
                 // Track healthy duration; reset attempt counter if we've been healthy
                 // long enough (the caller checks this).
@@ -98,31 +105,31 @@ func (c *Collector) consumeMetricsStream(ctx context.Context, scope client.HostS
                 }
                 // Update latest non-time-series observations.
                 latest := mapMetricsToLatest(e.Data)
-                // Compute per-interface network rates from previous counters
-                if len(latest.NetInterfaces) > 0 && len(prevLatest.NetInterfaces) > 0 {
+                // Compute per-interface network rates from previous counters.
+                // dt is the interval between the previous raw event and this one
+                // (~2s, matching tailkitd's stream interval). On the first event
+                // after a (re)connect, prevEventAt is zero and we skip — no
+                // previous sample to compute a rate from.
+                if len(latest.NetInterfaces) > 0 && len(prevLatest.NetInterfaces) > 0 && !prevEventAt.IsZero() {
                         prevMap := make(map[string]state.NetInterfaceCounters, len(prevLatest.NetInterfaces))
                         for _, p := range prevLatest.NetInterfaces {
                                 prevMap[p.Name] = p
                         }
-                        now := c.clock.Now()
-                        for i := range latest.NetInterfaces {
-                                if prev, ok := prevMap[latest.NetInterfaces[i].Name]; ok {
-                                        // Need the time of the previous sample — use LastSampleAt
-                                        host, _ := c.store.Host(hostName)
-                                        if host.LastSampleAt != nil {
-                                                dt := now.Sub(*host.LastSampleAt).Seconds()
-                                                if dt > 0 {
-                                                        if latest.NetInterfaces[i].BytesRecv >= prev.BytesRecv {
-                                                                latest.NetInterfaces[i].RxBps = float64(latest.NetInterfaces[i].BytesRecv-prev.BytesRecv) / dt
-                                                        }
-                                                        if latest.NetInterfaces[i].BytesSent >= prev.BytesSent {
-                                                                latest.NetInterfaces[i].TxBps = float64(latest.NetInterfaces[i].BytesSent-prev.BytesSent) / dt
-                                                        }
+                        dt := now.Sub(prevEventAt).Seconds()
+                        if dt > 0 {
+                                for i := range latest.NetInterfaces {
+                                        if prev, ok := prevMap[latest.NetInterfaces[i].Name]; ok {
+                                                if latest.NetInterfaces[i].BytesRecv >= prev.BytesRecv {
+                                                        latest.NetInterfaces[i].RxBps = float64(latest.NetInterfaces[i].BytesRecv-prev.BytesRecv) / dt
+                                                }
+                                                if latest.NetInterfaces[i].BytesSent >= prev.BytesSent {
+                                                        latest.NetInterfaces[i].TxBps = float64(latest.NetInterfaces[i].BytesSent-prev.BytesSent) / dt
                                                 }
                                         }
                                 }
                         }
                 }
+                prevEventAt = now
                 c.store.SetLatest(hostName, latest)
                 // Update uptime from the host info (if present).
                 if e.Data.Host != nil {
@@ -253,10 +260,8 @@ func mapMetricsToLatest(m client.Metrics) state.Latest {
                                 Name:      n.Name,
                                 BytesRecv: n.BytesRecv,
                                 BytesSent: n.BytesSent,
-                                // RxBps/TxBps are computed by the aggregator; we don't have
-                                // the rate for the "latest" snapshot without the previous
-                                // counter. Leave 0 for now; the API can derive from the
-                                // latest Sample if needed.
+                                // RxBps/TxBps are computed in consumeMetricsStream
+                                // using the previous event's counters + dt.
                         })
                 }
         }

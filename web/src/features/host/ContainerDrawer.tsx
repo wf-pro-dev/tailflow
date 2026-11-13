@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { MetricChart } from "@/components/MetricChart";
 
 interface Props {

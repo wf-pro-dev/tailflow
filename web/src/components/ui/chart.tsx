@@ -2,11 +2,12 @@ import * as React from "react";
 import * as RechartsPrimitive from "recharts";
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Line, LineChart,
-  XAxis, YAxis, type TooltipProps,
+  XAxis, YAxis,
 } from "recharts";
 import { cn } from "@/lib/utils";
 
 // --- shadcn/ui ChartContainer (wraps ResponsiveContainer with theming) ---
+
 const THEMES = { light: "", dark: ".dark" } as const;
 
 export type ChartConfig = {
@@ -21,14 +22,6 @@ type ChartContextProps = {
 };
 
 const ChartContext = React.createContext<ChartContextProps | null>(null);
-
-function useChart() {
-  const context = React.useContext(ChartContext);
-  if (!context) {
-    throw new Error("useChart must be used within a <ChartContainer />");
-  }
-  return context;
-}
 
 export function ChartContainer({
   config,
@@ -45,13 +38,28 @@ export function ChartContainer({
   );
 }
 
-export function ChartTooltip({ active, payload, label }: TooltipProps<number, string>) {
+// recharts v3 changed the TooltipProps generic shape; use a permissive
+// interface that matches what recharts actually passes to tooltip content.
+interface ChartTooltipItem {
+  name?: string | number;
+  value?: number | string;
+  color?: string;
+  dataKey?: string | number;
+}
+
+interface ChartTooltipProps {
+  active?: boolean;
+  payload?: ChartTooltipItem[];
+  label?: string | number;
+}
+
+export function ChartTooltip({ active, payload, label }: ChartTooltipProps) {
   if (!active || !payload?.length) return null;
   return (
     <div className="rounded-lg border border-white/[0.08] bg-[#18181B] px-3 py-2 text-xs shadow-xl">
-      {label && <div className="mb-1 text-zinc-500">{label}</div>}
+      {label != null && label !== "" && <div className="mb-1 text-zinc-500">{label}</div>}
       <div className="space-y-1">
-        {payload.map((item, i) => (
+        {payload.map((item: ChartTooltipItem, i: number) => (
           <div key={i} className="flex items-center gap-2">
             <span className="h-2 w-2 rounded-full" style={{ backgroundColor: item.color }} />
             <span className="text-zinc-400">{item.name}</span>

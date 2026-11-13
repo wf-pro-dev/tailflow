@@ -334,6 +334,11 @@ func (h *Handler) handleHostAllContainerStats(w http.ResponseWriter, r *http.Req
         if host == "" {
                 host = pathLastSegment(r.URL.Path)
         }
+        if _, ok := h.store.Host(host); !ok {
+                h.writeProblem(w, r, http.StatusNotFound, "host-not-found",
+                        "Host not found", "no host with that name", host)
+                return
+        }
         stats := h.store.AllContainerStats(host)
         writeJSON(w, http.StatusOK, map[string]any{
                 "host":  host,
