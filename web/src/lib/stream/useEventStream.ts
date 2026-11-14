@@ -16,6 +16,9 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { Host, MetricsResponse } from "@/lib/api/client";
 import { queryKeys } from "@/lib/api/hooks";
+import { setStreamStatus as setSharedStatus } from "./statusStore";
+
+export type StreamStatus = "connecting" | "open" | "reconnecting" | "closed" | "fallback";
 
 interface MetricsSampleData {
   host: string;
@@ -30,7 +33,12 @@ export function useEventStream(topics: string[], enabled: boolean = true) {
   const queryClient = useQueryClient();
   const esRef = useRef<EventSource | null>(null);
   const failureCount = useRef(0);
-  const [streamStatus, setStreamStatus] = useState<"connecting" | "open" | "reconnecting" | "closed" | "fallback">("connecting");
+  const [streamStatus, setStreamStatus] = useState<StreamStatus>("connecting");
+  // Publish status to the shared store so components without their own
+  // EventSource (e.g. SettingsPage) can read the connection state.
+  useEffect(() => {
+    setSharedStatus(streamStatus);
+  }, [streamStatus]);
   const pollingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Start polling fallback (10s). Called when SSE fails 3 times.

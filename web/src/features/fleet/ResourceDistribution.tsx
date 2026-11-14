@@ -74,7 +74,7 @@ function ResourceSection({
         {hosts.map((h) => (
           <div key={h.name} className="flex items-center gap-3 text-xs">
             <span className="w-20 truncate text-zinc-400">{h.name}</span>
-            <div className="flex-1 overflow-hidden rounded-full bg-white/[0.04]">
+            <div className="flex-1 overflow-hidden rounded-full bg-surface-raised">
               <div
                 className={`h-2 rounded-full ${color} transition-all duration-300`}
                 style={{ width: `${Math.max(h.fleet_share ?? 0, 2)}%` }}
@@ -98,7 +98,7 @@ function ContainerRow({ container }: { container: ContainerResource }) {
         <span className="truncate text-zinc-300">{container.name}</span>
         <span className="truncate text-zinc-600">{container.host}</span>
       </div>
-      <div className="flex-1 overflow-hidden rounded-full bg-white/[0.04]">
+      <div className="flex-1 overflow-hidden rounded-full bg-surface-raised">
         <div
           className="h-2 rounded-full bg-cyan-500 transition-all duration-300"
           style={{ width: `${Math.min((container.cpu_percent / maxCPU) * 100, 100)}%` }}

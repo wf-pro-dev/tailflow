@@ -7,7 +7,7 @@ export function ProcessTable({ host }: { host: string }) {
   // SSE subscription for metrics:{host} is handled by the host layout.
 
   if (isLoading) return <div className="space-y-1">{[0,1,2,3,4].map(i => <div key={i} className="skeleton h-12 rounded-lg" />)}</div>;
-  if (error) return <div className="card text-red-400">Error: {error.message}</div>;
+  if (error) return <div className="card text-danger">Error: {error.message}</div>;
   if (!data) return null;
 
   return (
@@ -18,7 +18,7 @@ export function ProcessTable({ host }: { host: string }) {
       <div className="card !p-0 overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-left text-xs uppercase tracking-wider text-zinc-500 border-b border-white/[0.04]">
+            <tr className="text-left text-xs uppercase tracking-wider text-zinc-500 border-b border-line-subtle">
               <th className="px-4 py-3 font-medium">PID</th>
               <th className="px-4 py-3 font-medium">Name</th>
               <th className="px-4 py-3 font-medium">Status</th>
@@ -34,7 +34,7 @@ export function ProcessTable({ host }: { host: string }) {
                 <td className="px-4 py-3 font-medium text-zinc-200">{p.name}</td>
                 <td className="px-4 py-3 text-zinc-500">{p.status}</td>
                 <td className="px-4 py-3 text-right font-mono text-xs">
-                  <span className={p.cpu_percent > 50 ? "text-amber-400" : "text-zinc-300"}>
+                  <span className={p.cpu_percent > 50 ? "text-status-degraded" : "text-zinc-300"}>
                     {p.cpu_percent.toFixed(1)}
                   </span>
                 </td>

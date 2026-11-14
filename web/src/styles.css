@@ -2,53 +2,341 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Tailflow UI token system — paired dark/light scales.
+ *
+ * Three rules (see docs/Tailflow-v1-design.md §UI System):
+ *   1. Saturation is reserved for status. Chrome is neutral; status colors
+ *      are the only saturated thing on screen because status IS the signal.
+ *   2. Real elevation, not glow. Lighter surfaces over a darker base; solid
+ *      neutral borders, never white-alpha hairlines or colored bloom.
+ *   3. Mechanical feedback, not glow. Hover/press/focus are surface or border
+ *      changes, not colored box-shadow blooms.
+ *
+ * Dark is the default (:root). Light is an explicit [data-theme="light"]
+ * override. The theme hook in lib/theme.ts sets data-theme on <html>.
+ */
+
 @layer base {
-  :root {
-    /* Status colors — semantic only */
-    --status-healthy: #22C55E;
-    --status-degraded: #F59E0B;
-    --status-stale: #84CC16;
-    --status-offline: #71717A;
-    --status-noagent: #A855F7;
+  :root,
+  [data-theme="dark"] {
+    color-scheme: dark;
+
+    /* Surfaces — elevation = lighter over darker */
+    --bg-base: #09090B;
+    --bg-surface: #141417;
+    --bg-raised: #1C1C20;
+    --bg-overlay: #232328;
+    --bg-sunken: #050506;
+
+    /* Borders — solid neutrals tuned to the base, replacing rgba(255,255,255,0.0X) */
+    --line-subtle: #232328;
+    --line: #2A2A2F;
+    --line-strong: #3A3A42;
+
+    /* Text */
+    --ink-primary: #FAFAFA;
+    --ink-secondary: #B4B4BA;
+    --ink-muted: #71717A;
+    --ink-faint: #52525B;
+
+    /* Accent — desaturated azure, distinct from Linear purple & neon cyan */
+    --accent: #6E9BD1;
+    --accent-hover: #82ABDC;
+    --accent-contrast: #09090B;
+    --accent-rgb: 110 155 209;
+
+    /* Status — desaturated + lifted for contrast on near-black */
+    --status-healthy: #3ECF8E;
+    --status-degraded: #E8A33D;
+    --status-stale: #B8C24A;
+    --status-offline: #6B6B73;
+    --status-noagent: #A88AE0;
+    /* Danger — error / failed / critical (distinct from degraded amber) */
+    --danger: #E57373;
+
+    /* RGB channels for Tailwind opacity modifiers (bg-status-X/10, text-ink-X/70) */
+    --ink-primary-rgb: 250 250 250;
+    --ink-secondary-rgb: 180 180 186;
+    --ink-muted-rgb: 113 113 122;
+    --ink-faint-rgb: 82 82 91;
+    --status-healthy-rgb: 62 207 142;
+    --status-degraded-rgb: 232 163 61;
+    --status-stale-rgb: 184 194 74;
+    --status-offline-rgb: 107 107 115;
+    --status-noagent-rgb: 168 138 224;
+    --danger-rgb: 229 115 115;
+
+    /* Shadows — minimal in dark; elevation is via bg, not shadow */
+    --shadow-overlay: 0 16px 48px -12px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--line);
+    --shadow-pop: 0 8px 24px -8px rgba(0, 0, 0, 0.5);
   }
 
-  /* Dark mode is the default for a monitoring dashboard */
+  [data-theme="light"] {
+    color-scheme: light;
+
+    /* Surfaces — raised white over warm off-white */
+    --bg-base: #FAFAF8;
+    --bg-surface: #FFFFFF;
+    --bg-raised: #F4F4F1;
+    --bg-overlay: #FFFFFF;
+    --bg-sunken: #EFEFEC;
+
+    /* Borders — solid warm neutrals */
+    --line-subtle: #E8E8E4;
+    --line: #D4D4D0;
+    --line-strong: #B8B8B2;
+
+    /* Text */
+    --ink-primary: #1A1A1A;
+    --ink-secondary: #525256;
+    --ink-muted: #8A8A85;
+    --ink-faint: #A8A8A2;
+
+    /* Accent — deeper azure for contrast on white */
+    --accent: #2D6BB0;
+    --accent-hover: #255A92;
+    --accent-contrast: #FFFFFF;
+    --accent-rgb: 45 107 176;
+
+    /* Status — deeper, more saturated for legibility on white */
+    --status-healthy: #16A34A;
+    --status-degraded: #D97706;
+    --status-stale: #65A30D;
+    --status-offline: #737373;
+    --status-noagent: #7C3AED;
+    /* Danger — error / failed / critical */
+    --danger: #DC2626;
+
+    /* RGB channels for Tailwind opacity modifiers */
+    --ink-primary-rgb: 26 26 26;
+    --ink-secondary-rgb: 82 82 86;
+    --ink-muted-rgb: 138 138 133;
+    --ink-faint-rgb: 168 168 162;
+    --status-healthy-rgb: 22 163 74;
+    --status-degraded-rgb: 217 119 6;
+    --status-stale-rgb: 101 163 13;
+    --status-offline-rgb: 115 115 115;
+    --status-noagent-rgb: 124 58 237;
+    --danger-rgb: 220 38 38;
+
+    /* Shadows — real elevation in light mode */
+    --shadow-overlay: 0 16px 48px -12px rgba(15, 15, 20, 0.18), 0 0 0 1px var(--line);
+    --shadow-pop: 0 8px 24px -8px rgba(15, 15, 20, 0.12);
+  }
+
   html {
-    color-scheme: dark;
+    background: var(--bg-base);
   }
 
   body {
     font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
-    background: #09090B;
-    color: #FAFAFA;
+    -moz-osx-font-smoothing: grayscale;
+    background: var(--bg-base);
+    color: var(--ink-primary);
+    font-feature-settings: "cv11", "ss03";
   }
 
-  /* Custom scrollbar — dark, thin, subtle */
+  /* Custom scrollbar — thin, neutral, theme-aware */
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 8px;
+    height: 8px;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 3px;
+    background: var(--line);
+    border-radius: 4px;
+    border: 2px solid var(--bg-base);
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.2);
+    background: var(--line-strong);
+  }
+
+  /* Focus-visible ring — solid, not a colored bloom */
+  :focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--accent);
+  }
+
+  ::selection {
+    background: rgb(var(--accent-rgb) / 0.25);
+    color: var(--ink-primary);
   }
 }
 
 @layer components {
-  /* Status dots */
+  /* --- Surfaces ---------------------------------------------------------- */
+
+  /* Card hierarchy: flat < card (subtle border) < raised < overlay */
+  .card {
+    background: var(--bg-surface);
+    border: 1px solid var(--line-subtle);
+    border-radius: 12px;
+    padding: 1.25rem;
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+  .card-raised {
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 1.25rem;
+  }
+  .card-overlay {
+    background: var(--bg-overlay);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: var(--shadow-overlay);
+  }
+  .card-flat {
+    background: var(--bg-surface);
+    border: none;
+    border-radius: 12px;
+  }
+  .card-hover {
+    cursor: pointer;
+  }
+  .card-hover:hover {
+    border-color: var(--line);
+    background: var(--bg-raised);
+  }
+
+  /* Sticky header — opaque, no blur. Replaces the glassmorphism .glass. */
+  .glass {
+    background: var(--bg-base);
+    border-bottom: 1px solid var(--line-subtle);
+  }
+
+  /* --- Buttons ----------------------------------------------------------- */
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors duration-150;
+    background: var(--bg-raised);
+    color: var(--ink-primary);
+    border: 1px solid var(--line);
+  }
+  .btn:hover {
+    background: var(--bg-overlay);
+    border-color: var(--line-strong);
+  }
+  .btn:active {
+    transform: scale(0.98);
+  }
+  .btn-primary {
+    @apply btn;
+    background: var(--accent);
+    color: var(--accent-contrast);
+    border-color: transparent;
+  }
+  .btn-primary:hover {
+    background: var(--accent-hover);
+    border-color: transparent;
+  }
+  .btn-ghost {
+    @apply btn;
+    background: transparent;
+    color: var(--ink-secondary);
+    border-color: transparent;
+  }
+  .btn-ghost:hover {
+    background: var(--bg-raised);
+    color: var(--ink-primary);
+  }
+  /* Segmented control item (theme picker, density toggle) */
+  .seg {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors duration-150;
+    background: transparent;
+    color: var(--ink-muted);
+    border: 1px solid transparent;
+  }
+  .seg:hover {
+    color: var(--ink-secondary);
+  }
+  .seg-active {
+    background: var(--bg-raised);
+    color: var(--ink-primary);
+    border-color: var(--line);
+  }
+
+  /* --- Inputs ------------------------------------------------------------ */
+
+  .input {
+    @apply rounded-lg px-3 py-1.5 text-sm transition-colors duration-150;
+    background: var(--bg-raised);
+    color: var(--ink-primary);
+    border: 1px solid var(--line);
+    outline: none;
+  }
+  .input::placeholder {
+    color: var(--ink-faint);
+  }
+  .input:focus {
+    border-color: var(--accent);
+  }
+
+  /* --- Typography helpers ------------------------------------------------ */
+
+  /* Metric label — small, muted, regular case (not uppercase-by-default). */
+  .metric-label {
+    @apply text-[11px] font-medium;
+    color: var(--ink-muted);
+  }
+  /* Section label — uppercase EARNED for deliberate section dividers only. */
+  .section-label {
+    @apply text-[10px] font-semibold uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-muted);
+  }
+  .metric-value {
+    @apply text-2xl font-bold tracking-tight;
+    color: var(--ink-primary);
+    font-feature-settings: "tnum";
+  }
+  .metric-sub {
+    @apply text-xs;
+    color: var(--ink-muted);
+  }
+
+  /* --- Tabs -------------------------------------------------------------- */
+
+  .tab-item {
+    @apply px-4 py-2 text-sm font-medium transition-colors duration-150 cursor-pointer;
+    color: var(--ink-muted);
+    border-bottom: 2px solid transparent;
+  }
+  .tab-item:hover {
+    color: var(--ink-secondary);
+  }
+  .tab-item-active {
+    @apply tab-item;
+    color: var(--ink-primary);
+    border-bottom-color: var(--accent);
+  }
+  .tab-item-disabled {
+    @apply tab-item;
+    color: var(--ink-faint);
+    cursor: not-allowed;
+  }
+
+  /* --- Tables ------------------------------------------------------------ */
+
+  .table-row {
+    @apply transition-colors duration-150;
+    border-bottom: 1px solid var(--line-subtle);
+  }
+  .table-row:hover {
+    background: var(--bg-raised);
+  }
+
+  /* --- Status ------------------------------------------------------------ */
+
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium;
+  }
   .status-dot {
     @apply inline-block h-2 w-2 rounded-full;
-  }
-  .status-dot-pulse {
-    @apply status-dot;
-    animation: pulse-glow 2s ease-in-out infinite;
   }
   .status-healthy { background-color: var(--status-healthy); }
   .status-degraded { background-color: var(--status-degraded); }
@@ -56,150 +344,53 @@
   .status-offline { background-color: var(--status-offline); }
   .status-noagent { background-color: var(--status-noagent); }
 
-  /* Dark Aurora card — inset hairline border + subtle top glow */
-  .card {
-    background: #18181B;
-    border-radius: 12px;
-    padding: 1.25rem;
-    box-shadow:
-      rgba(255, 255, 255, 0.05) 0 0 0 1px inset,
-      0 -20px 80px -20px rgba(255, 255, 255, 0.03) inset;
-    transition: box-shadow 0.2s ease;
-  }
-  .card-hover {
-    cursor: pointer;
-  }
-  .card-hover:hover {
-    box-shadow:
-      rgba(255, 255, 255, 0.08) 0 0 0 1px inset,
-      0 -20px 80px -20px rgba(94, 106, 210, 0.10) inset;
-  }
-
-  /* Glassmorphism — sticky topbar, floating panels */
-  .glass {
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    background: rgba(9, 9, 11, 0.8);
-  }
-
-  /* Buttons */
-  .btn {
-    @apply inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors duration-150;
-    background: #27272A;
-    color: #FAFAFA;
-    border: 1px solid transparent;
-  }
-  .btn:hover {
-    background: #3F3F46;
-  }
-  .btn-primary {
-    @apply btn;
-    background: #5E6AD2;
-    color: #fff;
-  }
-  .btn-primary:hover {
-    background: #7B85E0;
-  }
-  .btn-ghost {
-    @apply btn;
-    background: transparent;
-    color: #A1A1AA;
-  }
-  .btn-ghost:hover {
-    background: rgba(255, 255, 255, 0.05);
-    color: #FAFAFA;
-  }
-
-  /* Inputs */
-  .input {
-    @apply rounded-lg px-3 py-1.5 text-sm transition-colors duration-150;
-    background: #18181B;
-    color: #FAFAFA;
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    outline: none;
-  }
-  .input:focus {
-    border-color: #5E6AD2;
-    box-shadow: 0 0 0 3px rgba(94, 106, 210, 0.15);
-  }
-  .input::placeholder {
-    color: #52525B;
-  }
-
-  /* Metric label */
-  .metric-label {
-    @apply text-xs font-medium uppercase tracking-wider;
-    color: #71717A;
-  }
-
-  /* Metric value */
-  .metric-value {
-    @apply text-2xl font-bold tracking-tight;
-    color: #FAFAFA;
-  }
-
-  /* Metric subtext */
-  .metric-sub {
-    @apply text-xs;
-    color: #71717A;
-  }
-
-  /* Tab bar item */
-  .tab-item {
-    @apply px-4 py-2 text-sm font-medium transition-colors duration-150 cursor-pointer;
-    color: #71717A;
-    border-bottom: 2px solid transparent;
-  }
-  .tab-item:hover {
-    color: #FAFAFA;
-  }
-  .tab-item-active {
-    @apply tab-item;
-    color: #5E6AD2;
-    border-bottom-color: #5E6AD2;
-  }
-  .tab-item-disabled {
-    @apply tab-item;
-    color: #3F3F46;
-    cursor: not-allowed;
-  }
-
-  /* Table */
-  .table-row {
-    @apply transition-colors duration-150;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-  }
-  .table-row:hover {
-    background: rgba(255, 255, 255, 0.02);
-  }
-
-  /* Badge */
-  .badge {
-    @apply inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium;
-  }
-
-  /* Live indicator — neon cyan pulse */
+  /* Live indicator — steady accent dot, calm breath, no neon glow. */
   .live-indicator {
     @apply inline-flex items-center gap-1.5 text-xs font-medium;
-    color: #00FFF1;
+    color: var(--ink-secondary);
   }
   .live-indicator::before {
     content: "";
-    @apply inline-block h-2 w-2 rounded-full;
-    background: #00FFF1;
-    box-shadow: 0 0 6px rgba(0, 255, 241, 0.6);
-    animation: pulse-glow 2s ease-in-out infinite;
+    @apply inline-block h-1.5 w-1.5 rounded-full;
+    background: var(--accent);
+    animation: live-breath 2.4s ease-in-out infinite;
   }
 
-  /* Skeleton loader */
+  /* --- Loading ----------------------------------------------------------- */
+
   .skeleton {
     @apply rounded;
-    background: linear-gradient(90deg, #18181B 25%, #27272A 50%, #18181B 75%);
-    background-size: 200% 100%;
-    animation: skeleton-shimmer 1.5s infinite;
+    background: var(--bg-sunken);
+    position: relative;
+    overflow: hidden;
+  }
+  .skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgb(var(--accent-rgb) / 0.06), transparent);
+    animation: skeleton-shimmer 1.6s infinite;
+  }
+
+  @keyframes live-breath {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
   }
   @keyframes skeleton-shimmer {
-    0% { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
+  @keyframes fade-in {
+    0% { opacity: 0; }
+    100% { opacity: 1; }
+  }
+  @keyframes slide-in-right {
+    0% { transform: translateX(100%); }
+    100% { transform: translateX(0); }
+  }
+  @keyframes number-tick {
+    0% { transform: translateY(6px); opacity: 0; }
+    100% { transform: translateY(0); opacity: 1; }
   }
 }

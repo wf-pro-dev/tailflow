@@ -4,7 +4,7 @@ export function PortTable({ host }: { host: string }) {
   const { data, isLoading, error } = useHostPorts(host);
 
   if (isLoading) return <div className="space-y-1">{[0,1,2,3].map(i => <div key={i} className="skeleton h-12 rounded-lg" />)}</div>;
-  if (error) return <div className="card text-red-400">Error: {error.message}</div>;
+  if (error) return <div className="card text-danger">Error: {error.message}</div>;
   if (!data || data.ports.length === 0) {
     return (
       <div className="card py-12 text-center text-zinc-500">
@@ -17,7 +17,7 @@ export function PortTable({ host }: { host: string }) {
     <div className="card !p-0 overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="text-left text-xs uppercase tracking-wider text-zinc-500 border-b border-white/[0.04]">
+          <tr className="text-left text-xs uppercase tracking-wider text-zinc-500 border-b border-line-subtle">
             <th className="px-4 py-3 font-medium">Port</th>
             <th className="px-4 py-3 font-medium">Proto</th>
             <th className="px-4 py-3 font-medium">Address</th>
@@ -37,7 +37,7 @@ export function PortTable({ host }: { host: string }) {
           ))}
         </tbody>
       </table>
-      <div className="border-t border-white/[0.04] px-4 py-2 text-xs text-zinc-500">
+      <div className="border-t border-line-subtle px-4 py-2 text-xs text-zinc-500">
         {data.ports.length} listening {data.ports.length === 1 ? "socket" : "sockets"}
       </div>
     </div>

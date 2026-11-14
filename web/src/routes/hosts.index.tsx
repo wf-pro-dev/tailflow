@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useHosts } from "@/lib/api/hooks";
-import { useEventStream } from "@/lib/stream/useEventStream";
+import { useStreamStatus } from "@/lib/stream/statusStore";
 import { StatusBadge } from "@/features/fleet/StatusBadge";
 import { StreamBanner } from "@/components/StreamBanner";
 import { relativeTime } from "@/lib/format";
@@ -12,7 +12,7 @@ export const Route = createFileRoute("/hosts/")({
 
 function HostsPage() {
   const { data: hosts, isLoading, error } = useHosts();
-  const { status } = useEventStream(["hosts"]);
+  const status = useStreamStatus();
 
   return (
     <div className="space-y-6">
@@ -38,7 +38,7 @@ function HostsPage() {
       )}
 
       {error && (
-        <div className="card text-red-400">Error: {error.message}</div>
+        <div className="card text-danger">Error: {error.message}</div>
       )}
 
       {!isLoading && !error && hosts && hosts.length === 0 && (
@@ -113,7 +113,7 @@ function HostCard({ host }: { host: Host }) {
           {host.tags.map((t) => (
             <span
               key={t}
-              className="rounded bg-white/[0.06] px-1.5 py-0.5 text-xs text-zinc-400"
+              className="rounded bg-surface-raised px-1.5 py-0.5 text-xs text-zinc-400"
             >
               {t}
             </span>
@@ -123,7 +123,7 @@ function HostCard({ host }: { host: Host }) {
 
       {/* Capabilities */}
       {host.capabilities && (
-        <div className="mt-3 flex gap-3 border-t border-white/[0.04] pt-3 text-xs">
+        <div className="mt-3 flex gap-3 border-t border-line-subtle pt-3 text-xs">
           <CapIndicator label="Metrics" enabled={host.capabilities.metrics} />
           <CapIndicator label="Docker" enabled={host.capabilities.docker} />
           {host.capabilities.docker && (
@@ -148,7 +148,7 @@ function HostCard({ host }: { host: Host }) {
 function CapIndicator({ label, enabled }: { label: string; enabled: boolean }) {
   return (
     <span className={`flex items-center gap-1 ${enabled ? "text-zinc-400" : "text-zinc-600"}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${enabled ? "bg-green-500" : "bg-zinc-600"}`} />
+      <span className={`h-1.5 w-1.5 rounded-full ${enabled ? "bg-status-healthy" : "bg-zinc-600"}`} />
       {label}
     </span>
   );

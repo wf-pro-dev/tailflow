@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useFleetSummary, useHosts } from "@/lib/api/hooks";
-import { useEventStream } from "@/lib/stream/useEventStream";
+import { useStreamStatus } from "@/lib/stream/statusStore";
 import { HostTable } from "./HostTable";
 import { FleetSummaryCards } from "./FleetSummaryCards";
 import { FleetMetrics } from "./FleetMetrics";
@@ -8,34 +8,50 @@ import { ResourceDistribution } from "./ResourceDistribution";
 import { Filters } from "./Filters";
 import { StreamBanner } from "@/components/StreamBanner";
 
+interface Filters {
+  q?: string;
+  status?: string;
+  sort?: string;
+  order?: "asc" | "desc";
+}
+
 export function FleetOverview() {
-  const [filters, setFilters] = useState<{ q?: string; status?: string; sort?: string }>({});
+  const [filters, setFilters] = useState<Filters>({ sort: "name", order: "asc" });
   const hostsQuery = useHosts(filters);
   const summaryQuery = useFleetSummary();
 
-  // Subscribe to host events + fleet summary events
-  const { status } = useEventStream(["hosts", "fleet"]);
+  // Stream status comes from the shared store (root owns the base subscription).
+  const status = useStreamStatus();
+
+  const onSort = (sort: string, order: "asc" | "desc") => setFilters((f) => ({ ...f, sort, order }));
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <StreamBanner status={status} />
 
-      {/* Row 1: KPI cards (Hosts, Memory, Disk) */}
+      {/* Bento row 1 — KPI strip */}
       <FleetSummaryCards summary={summaryQuery.data} isLoading={summaryQuery.isLoading} />
 
-      {/* Row 2: Fleet metrics charts (full width, 3 columns) */}
-      <FleetMetrics />
+      {/* Bento row 2 — fleet charts (wide) + resource distribution (sidebar) */}
+      <div className="grid gap-4 lg:grid-cols-4">
+        <div className="lg:col-span-3">
+          <FleetMetrics />
+        </div>
+        <div className="lg:col-span-1">
+          <ResourceDistribution summary={summaryQuery.data} />
+        </div>
+      </div>
 
-      {/* Row 3: Resource distribution + top containers */}
-      <ResourceDistribution summary={summaryQuery.data} />
-
-      {/* Row 4: Host table */}
+      {/* Bento row 3 — host table (full width, dominant) */}
       <div className="card !p-0">
         <Filters filters={filters} onChange={setFilters} />
         <HostTable
           hosts={hostsQuery.data ?? []}
           isLoading={hostsQuery.isLoading}
           error={hostsQuery.error}
+          sort={filters.sort}
+          order={filters.order}
+          onSort={onSort}
         />
       </div>
     </div>

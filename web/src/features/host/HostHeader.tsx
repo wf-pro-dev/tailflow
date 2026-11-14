@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { useHost } from "@/lib/api/hooks";
 import { StatusBadge } from "@/features/fleet/StatusBadge";
 import { relativeTime, duration } from "@/lib/format";
@@ -6,11 +7,23 @@ export function HostHeader({ hostName }: { hostName: string }) {
   const { data: host, isLoading, error } = useHost(hostName);
 
   if (isLoading) return <div className="card"><div className="skeleton h-16 rounded" /></div>;
-  if (error) return <div className="card text-red-400">Error: {error.message}</div>;
+  if (error) return <div className="card text-danger">Error: {error.message}</div>;
   if (!host) return null;
 
   return (
     <div className="card">
+      {/* Breadcrumb — Fleet / environment / host */}
+      <nav className="mb-3 flex items-center gap-1.5 text-xs text-ink-muted">
+        <Link to="/" className="hover:text-ink-secondary transition-colors">Fleet</Link>
+        {host.environment && (
+          <>
+            <span className="text-ink-faint">›</span>
+            <Link to="/" className="hover:text-ink-secondary transition-colors">{host.environment}</Link>
+          </>
+        )}
+        <span className="text-ink-faint">›</span>
+        <span className="text-ink-secondary">{host.name}</span>
+      </nav>
       <div className="flex items-start justify-between">
         <div>
           <div className="flex items-center gap-3">
@@ -50,7 +63,7 @@ export function HostHeader({ hostName }: { hostName: string }) {
         </div>
       )}
       {host.capabilities?.reasons && Object.entries(host.capabilities.reasons).map(([cap, reason]) => (
-        <div key={cap} className="mt-2 text-xs text-amber-400/80">
+        <div key={cap} className="mt-2 text-xs text-status-degraded/80">
           {cap}: {reason}
         </div>
       ))}
@@ -61,7 +74,7 @@ export function HostHeader({ hostName }: { hostName: string }) {
 function CapIndicator({ label, enabled }: { label: string; enabled: boolean }) {
   return (
     <span className={`flex items-center gap-1 ${enabled ? "text-zinc-400" : "text-zinc-600"}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${enabled ? "bg-green-500" : "bg-zinc-600"}`} />
+      <span className={`h-1.5 w-1.5 rounded-full ${enabled ? "bg-status-healthy" : "bg-zinc-600"}`} />
       {label}
     </span>
   );

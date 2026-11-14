@@ -56,7 +56,7 @@ interface ChartTooltipProps {
 export function ChartTooltip({ active, payload, label }: ChartTooltipProps) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-lg border border-white/[0.08] bg-[#18181B] px-3 py-2 text-xs shadow-xl">
+    <div className="rounded-lg border border-line bg-surface px-3 py-2 text-xs shadow-xl">
       {label != null && label !== "" && <div className="mb-1 text-zinc-500">{label}</div>}
       <div className="space-y-1">
         {payload.map((item: ChartTooltipItem, i: number) => (

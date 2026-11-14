@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { MetricChart } from "@/components/MetricChart";
+import { useChartColors } from "@/lib/chartColors";
 
 interface Props {
   host: string;
@@ -13,11 +14,11 @@ export function ContainerDrawer({ host, containerID, onClose }: Props) {
   const [sub, setSub] = useState<SubTab>("overview");
 
   return (
-    <div className="fixed inset-y-0 right-0 z-50 flex w-full max-w-2xl flex-col bg-[#09090B] shadow-2xl"
+    <div className="fixed inset-y-0 right-0 z-50 flex w-full max-w-2xl flex-col bg-surface-base shadow-2xl"
       style={{ animation: "slide-in-right 0.3s ease-out" }}
     >
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-white/[0.04] px-5 py-4">
+      <div className="flex items-center justify-between border-b border-line-subtle px-5 py-4">
         <div className="flex gap-1">
           {(["overview", "stats", "logs"] as const).map((s) => (
             <button
@@ -31,7 +32,7 @@ export function ContainerDrawer({ host, containerID, onClose }: Props) {
         </div>
         <button
           onClick={onClose}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-300 transition-colors"
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 hover:bg-surface-raised hover:text-zinc-300 transition-colors"
           aria-label="Close"
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -55,7 +56,7 @@ export function ContainerDrawer({ host, containerID, onClose }: Props) {
 function OverviewPanel({ host, containerID }: { host: string; containerID: string }) {
   const { data, isLoading, error } = useContainerInspect(host, containerID);
   if (isLoading) return <div className="text-zinc-500">Loading…</div>;
-  if (error) return <div className="text-red-400">Error: {error.message}</div>;
+  if (error) return <div className="text-danger">Error: {error.message}</div>;
   if (!data) return null;
 
   return (
@@ -69,7 +70,7 @@ function OverviewPanel({ host, containerID }: { host: string; containerID: strin
       {data.command && <Row label="Command" value={data.command} mono />}
       {data.created_at && <Row label="Created" value={new Date(data.created_at).toLocaleString()} />}
       {data.labels && Object.keys(data.labels).length > 0 && (
-        <div className="pt-3 border-t border-white/[0.04]">
+        <div className="pt-3 border-t border-line-subtle">
           <div className="metric-label mb-2">Labels</div>
           <div className="space-y-1">
             {Object.entries(data.labels).map(([k, v]) => (
@@ -119,6 +120,7 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
   const [connected, setConnected] = useState(false);
   const [history, setHistory] = useState<StatsHistory>({ t: [], cpu: [], mem: [], netRx: [], netTx: [] });
   const sampleCount = useRef(0);
+  const colors = useChartColors();
 
   useEffect(() => {
     const url = `/api/v1/hosts/${encodeURIComponent(host)}/docker/containers/${containerID}/stats`;
@@ -158,7 +160,7 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
       {/* Live indicator */}
       <div className="flex items-center gap-2 text-sm">
         <span className={`status-dot ${connected ? "status-dot-pulse status-healthy" : "status-offline"}`} />
-        <span className={connected ? "text-green-400" : "text-zinc-500"}>
+        <span className={connected ? "text-status-healthy" : "text-zinc-500"}>
           {connected ? "Live" : "Disconnected"}
         </span>
       </div>
@@ -170,13 +172,13 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
           <div className="card">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-medium text-zinc-300">CPU</h3>
-              <span className="text-lg font-bold tracking-tight text-blue-400">
+              <span className="text-lg font-bold tracking-tight text-accent">
                 {(history.cpu[history.cpu.length - 1] ?? 0).toFixed(1)}%
               </span>
             </div>
             <MetricChart
               t={history.t}
-              series={[{ label: "CPU %", data: history.cpu, color: "#3DA5E0" }]}
+              series={[{ label: "CPU %", data: history.cpu, color: colors.accent }]}
               format={(v) => `${v.toFixed(1)}%`}
               yMax={100}
               type="area"
@@ -189,7 +191,7 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-medium text-zinc-300">Memory</h3>
               <div className="text-right">
-                <span className="text-lg font-bold tracking-tight text-purple-400">
+                <span className="text-lg font-bold tracking-tight text-status-noagent">
                   {(history.mem[history.mem.length - 1] ?? 0).toFixed(1)}%
                 </span>
                 {stats && (
@@ -202,7 +204,7 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
             </div>
             <MetricChart
               t={history.t}
-              series={[{ label: "Mem %", data: history.mem, color: "#6F3FE0" }]}
+              series={[{ label: "Mem %", data: history.mem, color: colors.noagent }]}
               format={(v) => `${v.toFixed(1)}%`}
               yMax={100}
               type="area"
@@ -215,10 +217,10 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-medium text-zinc-300">Network I/O</h3>
               <div className="flex gap-4 text-sm">
-                <span className="text-green-400">
+                <span className="text-status-healthy">
                   ↓ {formatBytes(history.netRx[history.netRx.length - 1])}
                 </span>
-                <span className="text-amber-400">
+                <span className="text-status-degraded">
                   ↑ {formatBytes(history.netTx[history.netTx.length - 1])}
                 </span>
               </div>
@@ -226,8 +228,8 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
             <MetricChart
               t={history.t}
               series={[
-                { label: "RX", data: history.netRx, color: "#22C55E" },
-                { label: "TX", data: history.netTx, color: "#F59E0B" },
+                { label: "RX", data: history.netRx, color: colors.healthy },
+                { label: "TX", data: history.netTx, color: colors.degraded },
               ]}
               format={(v) => formatBytes(v)}
               height={160}
@@ -311,7 +313,7 @@ function LogViewer({ host, containerID }: { host: string; containerID: string })
 
       <div
         ref={containerRef}
-        className="flex-1 overflow-auto rounded-lg border border-white/[0.04] bg-black/40 p-3 font-mono text-xs leading-relaxed text-zinc-300"
+        className="flex-1 overflow-auto rounded-lg border border-line-subtle bg-sunken p-3 font-mono text-xs leading-relaxed text-zinc-300"
       >
         {filtered.length === 0 ? (
           <div className="text-zinc-600">

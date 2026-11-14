@@ -18,7 +18,7 @@ export function StreamBanner({ status }: Props) {
   };
 
   return (
-    <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+    <div className="mb-4 rounded-md border border-status-degraded/30 bg-status-degraded/10 px-4 py-2 text-sm text-status-degraded">
       {messages[status] ?? "Stream disconnected"}
     </div>
   );

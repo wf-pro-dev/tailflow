@@ -30,7 +30,7 @@ export function SystemdTab({ host }: { host: string }) {
   }
 
   if (error) {
-    return <div className="card text-red-400">Error: {error.message}</div>;
+    return <div className="card text-danger">Error: {error.message}</div>;
   }
 
   const units = (data as any)?.units as SystemdUnit[] | undefined;
@@ -54,7 +54,7 @@ export function SystemdTab({ host }: { host: string }) {
           {units.length} units
         </span>
         {failed > 0 && (
-          <span className="text-sm text-red-400">
+          <span className="text-sm text-danger">
             ⚠ {failed} failed
           </span>
         )}
@@ -62,7 +62,7 @@ export function SystemdTab({ host }: { host: string }) {
       <div className="card !p-0 overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-left text-xs uppercase tracking-wider text-zinc-500 border-b border-white/[0.04]">
+            <tr className="text-left text-xs uppercase tracking-wider text-zinc-500 border-b border-line-subtle">
               <th className="px-4 py-3 font-medium">Unit</th>
               <th className="px-4 py-3 font-medium">Load</th>
               <th className="px-4 py-3 font-medium">Active</th>
@@ -74,7 +74,7 @@ export function SystemdTab({ host }: { host: string }) {
             {units.map((u) => (
               <tr
                 key={u.name}
-                className={`table-row ${u.active_state === "failed" ? "bg-red-500/5" : ""}`}
+                className={`table-row ${u.active_state === "failed" ? "bg-danger/5" : ""}`}
               >
                 <td className="px-4 py-3 font-mono text-xs text-zinc-300">{u.name}</td>
                 <td className="px-4 py-3">
@@ -96,15 +96,15 @@ export function SystemdTab({ host }: { host: string }) {
 
 function StateChip({ state }: { state: string }) {
   const colors: Record<string, string> = {
-    active: "text-green-400",
-    running: "text-green-400",
+    active: "text-status-healthy",
+    running: "text-status-healthy",
     loaded: "text-zinc-400",
     inactive: "text-zinc-500",
-    failed: "text-red-400",
-    activating: "text-blue-400",
-    deactivating: "text-amber-400",
-    reloading: "text-blue-400",
-    maintenance: "text-amber-400",
+    failed: "text-danger",
+    activating: "text-accent",
+    deactivating: "text-status-degraded",
+    reloading: "text-accent",
+    maintenance: "text-status-degraded",
   };
   return (
     <span className={`text-xs font-medium ${colors[state] || "text-zinc-400"}`}>

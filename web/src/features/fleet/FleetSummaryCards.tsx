@@ -37,8 +37,8 @@ export function FleetSummaryCards({ summary, isLoading }: Props) {
       label: "Hosts",
       value: `${healthy}`,
       sub: `${notHealthy} not healthy`,
-      subColor: notHealthy > 0 ? "text-amber-400" : "text-zinc-500",
-      accent: "text-green-400",
+      subColor: notHealthy > 0 ? "text-status-degraded" : "text-zinc-500",
+      accent: "text-status-healthy",
       bars: generateStatusBars(summary.counts ?? {}),
     },
     {
@@ -48,7 +48,7 @@ export function FleetSummaryCards({ summary, isLoading }: Props) {
         ? `${bytes(summary.total_mem_used)} / ${bytes(summary.total_mem_bytes)}`
         : "—",
       subColor: "text-zinc-500",
-      accent: "text-purple-400",
+      accent: "text-status-noagent",
     },
     {
       label: "Disk",
@@ -57,7 +57,7 @@ export function FleetSummaryCards({ summary, isLoading }: Props) {
         ? `${bytes(summary.total_disk_used)} / ${bytes(summary.total_disk_bytes)}`
         : "—",
       subColor: "text-zinc-500",
-      accent: "text-orange-400",
+      accent: "text-status-degraded",
     },
   ];
 
@@ -83,17 +83,17 @@ export function FleetSummaryCards({ summary, isLoading }: Props) {
 
 function generateStatusBars(counts: Record<string, number>): React.ReactNode {
   const colors: Record<string, string> = {
-    healthy: "bg-green-500",
-    degraded: "bg-amber-500",
-    stale: "bg-lime-500",
-    "no_agent": "bg-purple-500",
-    "no-agent": "bg-purple-500",
-    offline: "bg-zinc-500",
+    healthy: "bg-status-healthy",
+    degraded: "bg-status-degraded",
+    stale: "bg-status-stale",
+    "no_agent": "bg-status-noagent",
+    "no-agent": "bg-status-noagent",
+    offline: "bg-status-offline",
   };
 
   const bars: React.ReactNode[] = [];
   for (const [status, count] of Object.entries(counts)) {
-    const color = colors[status] || "bg-zinc-600";
+    const color = colors[status] || "bg-status-offline";
     for (let i = 0; i < count; i++) {
       bars.push(
         <div

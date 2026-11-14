@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useHosts } from "@/lib/api/hooks";
 import { MetricChart } from "@/components/MetricChart";
+import { useChartColors } from "@/lib/chartColors";
 import { rate } from "@/lib/format";
 
 interface Sample {
@@ -16,6 +17,7 @@ const MAX_POINTS = 180;
 
 export function FleetMetrics() {
   const { data: hosts } = useHosts();
+  const colors = useChartColors();
   const [samples, setSamples] = useState<Sample[]>([]);
   const [latest, setLatest] = useState<{ cpu: number; mem: number; rx: number; tx: number } | null>(null);
 
@@ -110,17 +112,18 @@ export function FleetMetrics() {
       <div className="card">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-sm font-medium text-zinc-300">Fleet CPU</h3>
-          <span className="text-lg font-bold tracking-tight text-blue-400">
+          <span className="text-lg font-bold tracking-tight tabular-nums text-accent">
             {(latest?.cpu ?? 0).toFixed(1)}%
           </span>
         </div>
         <MetricChart
           t={t}
-          series={[{ label: "Mean CPU %", data: cpu, color: "#3DA5E0" }]}
+          series={[{ label: "Mean CPU %", data: cpu, color: colors.accent }]}
           format={(v) => `${v.toFixed(1)}%`}
           yMax={100}
           type="area"
           height={120}
+          showLegend={false}
         />
       </div>
 
@@ -128,17 +131,18 @@ export function FleetMetrics() {
       <div className="card">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-sm font-medium text-zinc-300">Fleet Memory</h3>
-          <span className="text-lg font-bold tracking-tight text-purple-400">
+          <span className="text-lg font-bold tracking-tight tabular-nums text-status-noagent">
             {(latest?.mem ?? 0).toFixed(1)}%
           </span>
         </div>
         <MetricChart
           t={t}
-          series={[{ label: "Mean Memory %", data: mem, color: "#6F3FE0" }]}
+          series={[{ label: "Mean Memory %", data: mem, color: colors.noagent }]}
           format={(v) => `${v.toFixed(1)}%`}
           yMax={100}
           type="area"
           height={120}
+          showLegend={false}
         />
       </div>
 
@@ -147,15 +151,15 @@ export function FleetMetrics() {
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-sm font-medium text-zinc-300">Fleet Network</h3>
           <div className="flex gap-3 text-sm">
-            <span className="text-green-400">↓ {rate(latest?.rx ?? 0)}</span>
-            <span className="text-amber-400">↑ {rate(latest?.tx ?? 0)}</span>
+            <span className="text-status-healthy">↓ {rate(latest?.rx ?? 0)}</span>
+            <span className="text-status-degraded">↑ {rate(latest?.tx ?? 0)}</span>
           </div>
         </div>
         <MetricChart
           t={t}
           series={[
-            { label: "RX", data: netRx, color: "#22C55E" },
-            { label: "TX", data: netTx, color: "#F59E0B" },
+            { label: "RX", data: netRx, color: colors.healthy },
+            { label: "TX", data: netTx, color: colors.degraded },
           ]}
           format={(v) => rate(v)}
           height={120}
