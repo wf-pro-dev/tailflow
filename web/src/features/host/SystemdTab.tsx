@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api/client";
+import { StateChip } from "@/components/StateChip";
 
 interface SystemdUnit {
   name: string;
@@ -78,10 +79,10 @@ export function SystemdTab({ host }: { host: string }) {
               >
                 <td className="px-4 py-3 font-mono text-xs text-zinc-300">{u.name}</td>
                 <td className="px-4 py-3">
-                  <StateChip state={u.load_state} />
+                  <StateChip state={u.load_state} variant="text" />
                 </td>
                 <td className="px-4 py-3">
-                  <StateChip state={u.active_state} />
+                  <StateChip state={u.active_state} variant="text" />
                 </td>
                 <td className="px-4 py-3 text-zinc-400 text-xs">{u.sub_state}</td>
                 <td className="px-4 py-3 text-zinc-500 text-xs">{u.description || "—"}</td>
@@ -94,21 +95,3 @@ export function SystemdTab({ host }: { host: string }) {
   );
 }
 
-function StateChip({ state }: { state: string }) {
-  const colors: Record<string, string> = {
-    active: "text-status-healthy",
-    running: "text-status-healthy",
-    loaded: "text-zinc-400",
-    inactive: "text-zinc-500",
-    failed: "text-danger",
-    activating: "text-accent",
-    deactivating: "text-status-degraded",
-    reloading: "text-accent",
-    maintenance: "text-status-degraded",
-  };
-  return (
-    <span className={`text-xs font-medium ${colors[state] || "text-zinc-400"}`}>
-      {state}
-    </span>
-  );
-}

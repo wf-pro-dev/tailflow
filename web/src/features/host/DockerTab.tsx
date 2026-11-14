@@ -1,17 +1,26 @@
 import { useState } from "react";
 import { useHostContainers, useHostSwarmServices, useHostComposeProjects, useHostDockerImages } from "@/lib/api/hooks";
 import { useQuery } from "@tanstack/react-query";
-import { api, type ContainerStats } from "@/lib/api/client";
+import { api, type ContainerStats, type Container } from "@/lib/api/client";
+import { StateChip } from "@/components/StateChip";
+import { useChartColors } from "@/lib/chartColors";
+import { ScatterChart, Scatter, XAxis, YAxis, ZAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { ContainerDrawer } from "./ContainerDrawer";
+
+/*
+ * DockerTab — the host's container explorer. Redesigned per the spec:
+ *   - a CPU-vs-Memory scatter summary (outlier hunting, Datadog-style) above
+ *   - the container inventory table with a unified StateChip + a Health column
+ *     (parsed from the human-readable status string until the backend exposes
+ *     Container.Health natively — Phase B)
+ * Images / Swarm / Compose sub-tabs are retained as-is.
+ */
 
 type SubTab = "containers" | "images" | "swarm" | "compose";
 
 export function DockerTab({ host }: { host: string }) {
   const [sub, setSub] = useState<SubTab>("containers");
   const [selectedContainer, setSelectedContainer] = useState<string | null>(null);
-
-  // SSE subscription for docker:{host} is handled by the host layout
-  // (hosts.$host.tsx) — no need for a separate subscription here.
 
   return (
     <div className="space-y-4">
@@ -45,7 +54,7 @@ export function DockerTab({ host }: { host: string }) {
 
 function ContainersTable({ host, onSelect }: { host: string; onSelect: (id: string) => void }) {
   const { data, isLoading, error } = useHostContainers(host);
-  // Fetch container stats (live-updated via SSE container.stats events)
+  // Fetch container stats (live-updated via SSE container.stats events).
   const { data: statsData } = useQuery({
     queryKey: ["container-stats", host],
     queryFn: () => api.hostContainerStats(host),
@@ -65,64 +74,180 @@ function ContainersTable({ host, onSelect }: { host: string; onSelect: (id: stri
   const stats = statsData?.stats ?? {};
 
   return (
-    <div className="card !p-0 overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-left text-xs uppercase tracking-wider text-zinc-500 border-b border-line-subtle">
-            <th className="px-4 py-3 font-medium">State</th>
-            <th className="px-4 py-3 font-medium">Name</th>
-            <th className="px-4 py-3 font-medium">Image</th>
-            <th className="px-4 py-3 font-medium text-right">CPU</th>
-            <th className="px-4 py-3 font-medium text-right">Memory</th>
-            <th className="px-4 py-3 font-medium">Status</th>
-            <th className="px-4 py-3 font-medium">Ports</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.containers.map((c) => {
-            const s = stats[c.id] as ContainerStats | undefined;
-            return (
-              <tr
-                key={c.id}
-                onClick={() => onSelect(c.id)}
-                className="table-row cursor-pointer"
-              >
-                <td className="px-4 py-3"><StateChip state={c.state} /></td>
-                <td className="px-4 py-3 font-medium text-zinc-200">{c.name}</td>
-                <td className="px-4 py-3 font-mono text-xs text-zinc-500">{c.image}</td>
-                <td className="px-4 py-3 text-right font-mono text-xs">
-                  {s ? (
-                    <span className={s.cpu_percent > 50 ? "text-status-degraded" : "text-zinc-300"}>
-                      {s.cpu_percent.toFixed(1)}%
-                    </span>
-                  ) : "—"}
-                </td>
-                <td className="px-4 py-3 text-right font-mono text-xs">
-                  {s ? (
-                    <span className="text-zinc-300">
-                      {formatBytes(s.mem_used_bytes)}
-                    </span>
-                  ) : "—"}
-                </td>
-                <td className="px-4 py-3 text-zinc-400">{c.status || "—"}</td>
-                <td className="px-4 py-3 font-mono text-xs text-zinc-500">
-                  {(c.ports ?? []).map((p, i) => (
-                    <div key={i}>
-                      {p.public ? `${p.ip || "0.0.0.0"}:${p.public}->` : ""}
-                      {p.private}/{p.proto}
-                    </div>
-                  ))}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      <div className="border-t border-line-subtle px-4 py-2 text-xs text-zinc-500">
-        {data.containers.length} containers
+    <div className="space-y-4">
+      {/* CPU vs Memory scatter — outlier hunting at a glance */}
+      <ContainerScatter containers={data.containers} stats={stats} />
+
+      <div className="card !p-0 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs uppercase tracking-wider text-zinc-500 border-b border-line-subtle">
+              <th className="px-4 py-3 font-medium">State</th>
+              <th className="px-4 py-3 font-medium">Name</th>
+              <th className="px-4 py-3 font-medium">Image</th>
+              <th className="px-4 py-3 font-medium text-right">CPU</th>
+              <th className="px-4 py-3 font-medium text-right">Memory</th>
+              <th className="px-4 py-3 font-medium">Status</th>
+              <th className="px-4 py-3 font-medium">Health</th>
+              <th className="px-4 py-3 font-medium">Ports</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.containers.map((c) => {
+              const s = stats[c.id] as ContainerStats | undefined;
+              const health = c.health || parseHealth(c.status);
+              return (
+                <tr
+                  key={c.id}
+                  onClick={() => onSelect(c.id)}
+                  className="table-row cursor-pointer"
+                >
+                  <td className="px-4 py-3"><StateChip state={c.state} variant="badge" /></td>
+                  <td className="px-4 py-3 font-medium text-zinc-200">{c.name}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-zinc-500">{c.image}</td>
+                  <td className="px-4 py-3 text-right font-mono text-xs">
+                    {s ? (
+                      <span className={s.cpu_percent > 50 ? "text-status-degraded" : "text-zinc-300"}>
+                        {s.cpu_percent.toFixed(1)}%
+                      </span>
+                    ) : "—"}
+                  </td>
+                  <td className="px-4 py-3 text-right font-mono text-xs">
+                    {s ? (
+                      <span className="text-zinc-300">
+                        {formatBytes(s.mem_used_bytes)}
+                      </span>
+                    ) : "—"}
+                  </td>
+                  <td className="px-4 py-3 text-zinc-400">{c.status || "—"}</td>
+                  <td className="px-4 py-3">
+                    {health ? <StateChip state={health} variant="badge" /> : <span className="text-ink-faint">—</span>}
+                  </td>
+                  <td className="px-4 py-3 font-mono text-xs text-zinc-500">
+                    {(c.ports ?? []).map((p, i) => (
+                      <div key={i}>
+                        {p.public ? `${p.ip || "0.0.0.0"}:${p.public}->` : ""}
+                        {p.private}/{p.proto}
+                      </div>
+                    ))}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <div className="border-t border-line-subtle px-4 py-2 text-xs text-zinc-500">
+          {data.containers.length} containers
+        </div>
       </div>
     </div>
   );
+}
+
+/*
+ * ContainerScatter — each running container plotted as a dot: CPU % on X,
+ * memory (MiB) on Y, coloured by state. One Scatter series per state so the
+ * legend doubles as a state key. Surfaces the "one container is burning CPU
+ * and memory" outlier that a flat table hides.
+ */
+function ContainerScatter({ containers, stats }: { containers: Container[]; stats: Record<string, ContainerStats> }) {
+  const colors = useChartColors();
+  const stateColor: Record<string, string> = {
+    running: colors.healthy,
+    exited: colors.offline,
+    paused: colors.degraded,
+    restarting: colors.accent,
+    created: colors.noagent,
+    dead: colors.danger,
+  };
+
+  const points = containers
+    .filter((c) => stats[c.id])
+    .map((c) => {
+      const s = stats[c.id];
+      return { name: c.name, cpu: s.cpu_percent, mem: s.mem_used_bytes / (1024 * 1024), state: c.state };
+    });
+
+  if (points.length < 2) return null;
+
+  const groups = new Map<string, typeof points>();
+  for (const p of points) {
+    const arr = groups.get(p.state) ?? [];
+    arr.push(p);
+    groups.set(p.state, arr);
+  }
+
+  return (
+    <div className="card">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-sm font-medium text-ink-secondary">CPU vs Memory</h3>
+        <span className="text-xs text-ink-muted">each dot is a container · coloured by state</span>
+      </div>
+      <div style={{ height: 220 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <ScatterChart margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} />
+            <XAxis
+              type="number"
+              dataKey="cpu"
+              name="CPU"
+              domain={[0, "dataMax"]}
+              stroke={colors.axis}
+              tick={{ fontSize: 11, fill: colors.tick }}
+              tickFormatter={(v: number) => `${v.toFixed(0)}%`}
+              tickLine={false}
+              axisLine={false}
+            />
+            <YAxis
+              type="number"
+              dataKey="mem"
+              name="Memory"
+              stroke={colors.axis}
+              tick={{ fontSize: 11, fill: colors.tick }}
+              tickFormatter={(v: number) => `${v.toFixed(0)}`}
+              tickLine={false}
+              axisLine={false}
+            />
+            <ZAxis range={[70, 70]} />
+            <Tooltip cursor={{ strokeDasharray: "3 3" }} content={<ScatterTooltip />} />
+            {[...groups.entries()].map(([state, data]) => (
+              <Scatter key={state} name={state} data={data} fill={stateColor[state] ?? colors.grid} isAnimationActive={false} />
+            ))}
+          </ScatterChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+interface ScatterTooltipProps {
+  active?: boolean;
+  payload?: { payload: { name: string; cpu: number; mem: number; state: string } }[];
+}
+
+function ScatterTooltip({ active, payload }: ScatterTooltipProps) {
+  if (!active || !payload?.length) return null;
+  const p = payload[0].payload;
+  return (
+    <div className="rounded-lg border border-line bg-surface px-3 py-2 text-xs shadow-xl">
+      <div className="text-zinc-200">{p.name}</div>
+      <div className="mt-1 text-zinc-400">
+        CPU <span className="text-zinc-200">{p.cpu.toFixed(1)}%</span> · Mem{" "}
+        <span className="text-zinc-200">{p.mem.toFixed(0)} MiB</span>
+      </div>
+    </div>
+  );
+}
+
+// Parse Docker's health state out of the human-readable status string (e.g.
+// "Up 5 minutes (healthy)") until the backend exposes Container.Health natively.
+function parseHealth(status?: string): string | null {
+  if (!status) return null;
+  const m = status.match(/\(health:\s*([a-z]+)\)|\(([a-z]+)\)/i);
+  if (!m) return null;
+  const v = (m[1] ?? m[2]).toLowerCase();
+  if (["healthy", "unhealthy", "starting"].includes(v)) return v;
+  return null;
 }
 
 function ImagesTable({ host }: { host: string }) {
@@ -134,7 +259,6 @@ function ImagesTable({ host }: { host: string }) {
     }
     return <div className="card text-danger">Error: {error.message}</div>;
   }
-  // Null-safe: data or data.images may be null/undefined
   const images = data?.images ?? [];
   if (images.length === 0) {
     return <div className="card py-12 text-center text-zinc-500"><p className="text-sm">No images</p></div>;
@@ -254,22 +378,6 @@ function ComposeTable({ host }: { host: string }) {
         </tbody>
       </table>
     </div>
-  );
-}
-
-function StateChip({ state }: { state: string }) {
-  const colors: Record<string, string> = {
-    running: "bg-status-healthy/10 text-status-healthy",
-    exited: "bg-status-offline/10 text-status-offline",
-    paused: "bg-status-degraded/10 text-status-degraded",
-    restarting: "bg-accent/10 text-accent",
-    created: "bg-status-noagent/10 text-status-noagent",
-    dead: "bg-danger/10 text-danger",
-  };
-  return (
-    <span className={`badge ${colors[state] || colors.exited}`}>
-      {state}
-    </span>
   );
 }
 

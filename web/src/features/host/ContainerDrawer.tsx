@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { MetricChart } from "@/components/MetricChart";
 import { useChartColors } from "@/lib/chartColors";
+import { rate } from "@/lib/format";
 
 interface Props {
   host: string;
@@ -120,6 +121,8 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
   const [connected, setConnected] = useState(false);
   const [history, setHistory] = useState<StatsHistory>({ t: [], cpu: [], mem: [], netRx: [], netTx: [] });
   const sampleCount = useRef(0);
+  // Previous cumulative network totals + timestamp, used to derive a rate.
+  const prevNetRef = useRef<{ rx: number; tx: number; t: number } | null>(null);
   const colors = useChartColors();
 
   useEffect(() => {
@@ -136,14 +139,38 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
         setStats(extracted);
         sampleCount.current++;
         const t = sampleCount.current;
+
+        // Derive the network RATE (bytes/s) from consecutive cumulative totals.
+        // Docker reports cumulative rx_bytes/tx_bytes per snapshot; plotting them
+        // raw draws a monotonically rising total, not throughput. Until the
+        // backend extraction divides by dt, derive the rate here.
+        const now = Date.now();
+        let rateRx = 0;
+        let rateTx = 0;
+        const prev = prevNetRef.current;
+        if (prev) {
+          const dt = (now - prev.t) / 1000;
+          if (dt > 0) {
+            const drx = (extracted.net_rx_bytes ?? 0) - prev.rx;
+            const dtx = (extracted.net_tx_bytes ?? 0) - prev.tx;
+            rateRx = drx > 0 ? drx / dt : 0; // guard counter resets / restarts
+            rateTx = dtx > 0 ? dtx / dt : 0;
+          }
+        }
+        prevNetRef.current = {
+          rx: extracted.net_rx_bytes ?? 0,
+          tx: extracted.net_tx_bytes ?? 0,
+          t: now,
+        };
+
         setHistory((h) => {
           const MAX = 120;
           const next = {
             t: [...h.t, t].slice(-MAX),
             cpu: [...h.cpu, extracted.cpu_percent ?? 0].slice(-MAX),
             mem: [...h.mem, extracted.mem_pct ?? 0].slice(-MAX),
-            netRx: [...h.netRx, extracted.net_rx_bytes ?? 0].slice(-MAX),
-            netTx: [...h.netTx, extracted.net_tx_bytes ?? 0].slice(-MAX),
+            netRx: [...h.netRx, rateRx].slice(-MAX),
+            netTx: [...h.netTx, rateTx].slice(-MAX),
           };
           return next;
         });
@@ -218,10 +245,10 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
               <h3 className="text-sm font-medium text-zinc-300">Network I/O</h3>
               <div className="flex gap-4 text-sm">
                 <span className="text-status-healthy">
-                  ↓ {formatBytes(history.netRx[history.netRx.length - 1])}
+                  ↓ {rate(history.netRx[history.netRx.length - 1])}
                 </span>
                 <span className="text-status-degraded">
-                  ↑ {formatBytes(history.netTx[history.netTx.length - 1])}
+                  ↑ {rate(history.netTx[history.netTx.length - 1])}
                 </span>
               </div>
             </div>
@@ -231,7 +258,7 @@ function StatsPanel({ host, containerID }: { host: string; containerID: string }
                 { label: "RX", data: history.netRx, color: colors.healthy },
                 { label: "TX", data: history.netTx, color: colors.degraded },
               ]}
-              format={(v) => formatBytes(v)}
+              format={(v) => rate(v)}
               height={160}
             />
           </div>

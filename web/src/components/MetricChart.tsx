@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, ChartContainer, ChartTooltip, type ChartConfig } from "@/components/ui/chart";
+import { ReferenceLine } from "recharts";
 import { useChartColors } from "@/lib/chartColors";
 
 export interface ChartSeries {
@@ -20,9 +21,11 @@ interface Props {
   syncId?: string;
   /** Show the clickable legend (per-series toggle). Defaults to true when >1 series. */
   showLegend?: boolean;
+  /** Horizontal threshold reference lines (e.g. 80%/90% CPU). */
+  referenceLines?: { y: number; color?: string; label?: string }[];
 }
 
-export function MetricChart({ t, series, format, yMax, height = 200, type = "line", syncId, showLegend }: Props) {
+export function MetricChart({ t, series, format, yMax, height = 200, type = "line", syncId, showLegend, referenceLines }: Props) {
   const colors = useChartColors();
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const legend = showLegend ?? series.length > 1;
@@ -136,6 +139,15 @@ export function MetricChart({ t, series, format, yMax, height = 200, type = "lin
               />
             ),
           )}
+          {referenceLines?.map((r, i) => (
+            <ReferenceLine
+              key={`ref-${i}`}
+              y={r.y}
+              stroke={r.color ?? colors.danger}
+              strokeDasharray="4 4"
+              label={r.label ? { value: r.label, fill: colors.tick, fontSize: 10, position: "insideTopRight" } : undefined}
+            />
+          ))}
         </Chart>
       </ChartContainer>
     </div>

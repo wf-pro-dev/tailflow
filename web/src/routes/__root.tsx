@@ -6,6 +6,8 @@ import { useEventStream } from "@/lib/stream/useEventStream";
 import { DensityProvider, useDensity } from "@/features/ui/DensityProvider";
 import { ToastProvider } from "@/features/ui/ToastProvider";
 import { CommandPalette, openCommandPalette } from "@/features/ui/CommandPalette";
+import { StreamBanner } from "@/components/StreamBanner";
+import { useStreamStatus } from "@/lib/stream/statusStore";
 
 interface RouterContext {
   queryClient: QueryClient;
@@ -22,6 +24,9 @@ function RootComponent() {
   // Base SSE subscription — always active so host/fleet data flows on every
   // route (including Settings). Host pages add their host-specific topics.
   useEventStream(["hosts", "fleet"]);
+  // Single global stream-status banner — read from the shared store so it
+  // reflects the connection state everywhere, without per-screen duplicates.
+  const status = useStreamStatus();
 
   return (
     <DensityProvider>
@@ -103,6 +108,7 @@ function RootComponent() {
 
         {/* Page content */}
         <main className="flex-1 overflow-auto p-6">
+          <StreamBanner status={status} />
           <Outlet />
         </main>
       </div>

@@ -42,7 +42,7 @@ const TABS: TabDef[] = [
   { label: "Processes", to: "/hosts/$host/processes", cap: "metrics", count: "processes" },
   { label: "Ports", to: "/hosts/$host/ports", cap: "metrics", count: "ports" },
   { label: "Docker", to: "/hosts/$host/docker", cap: "docker", count: "containers" },
-  { label: "Systemd", to: "/hosts/$host/systemd", count: "systemd" },
+  { label: "Systemd", to: "/hosts/$host/systemd", cap: "metrics", count: "systemd" },
 ];
 
 /** Eager light queries for tab counts. Reuses the same cache keys the tab
@@ -67,6 +67,7 @@ function useTabCounts(host: string, caps?: { metrics: boolean; docker: boolean }
   const systemd = useQuery({
     queryKey: ["systemd", host],
     queryFn: () => api.systemdUnits(host),
+    enabled: !!caps?.metrics,
   });
   return {
     containers: containers.data?.containers.length,

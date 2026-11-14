@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useHostMetrics, useHostMetricsLatest } from "@/lib/api/hooks";
 import { MetricChart } from "@/components/MetricChart";
 import { useChartColors } from "@/lib/chartColors";
@@ -14,6 +15,16 @@ const WINDOWS = [
 // line appears at the same timestamp across all of them.
 const SYNC_ID = "host-metrics";
 
+/*
+ * MetricCharts — the host-detail metric grid, redesigned so each metric gets
+ * the chart type that actually fits it (one right chart per metric), instead
+ * of every metric collapsing into an area:
+ *   - CPU      : line + 80/90% threshold reference lines
+ *   - Memory   : line + 80/90% threshold reference lines
+ *   - Network  : two-line (RX vs TX) + per-interface breakdown
+ *   - Disk     : horizontal bar chart per mountpoint, threshold-coloured cells
+ *                (replaces the static progress bars)
+ */
 export function MetricCharts({ host: hostName }: { host: string }) {
   const [window, setWindow] = useState("15m");
   const { data, isLoading, error } = useHostMetrics(hostName, window);
@@ -46,6 +57,12 @@ export function MetricCharts({ host: hostName }: { host: string }) {
 
   const last = (a: (number | null)[]) => (a.length > 0 ? a[a.length - 1] : null);
 
+  // 80/90% thresholds for CPU and Memory.
+  const thresholds = [
+    { y: 80, color: colors.stale, label: "80" },
+    { y: 90, color: colors.danger, label: "90" },
+  ];
+
   return (
     <div className="space-y-4">
       {/* Window selector + live indicator */}
@@ -64,9 +81,9 @@ export function MetricCharts({ host: hostName }: { host: string }) {
         <div className="live-indicator">Live</div>
       </div>
 
-      {/* Bento grid: 2x2 */}
+      {/* Bento grid: 2x2 — one right chart per metric */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {/* CPU */}
+        {/* CPU — line + thresholds */}
         <div className="card">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-medium text-ink-secondary">CPU</h3>
@@ -79,13 +96,14 @@ export function MetricCharts({ host: hostName }: { host: string }) {
             series={[{ label: "Total", data: cpu, color: colors.accent }]}
             format={(v) => percent(v, 1)}
             yMax={100}
-            type="area"
+            type="line"
             syncId={SYNC_ID}
             showLegend={false}
+            referenceLines={thresholds}
           />
         </div>
 
-        {/* Memory */}
+        {/* Memory — line + thresholds */}
         <div className="card">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-medium text-ink-secondary">Memory</h3>
@@ -98,13 +116,14 @@ export function MetricCharts({ host: hostName }: { host: string }) {
             series={[{ label: "Used %", data: memPct, color: colors.noagent }]}
             format={(v) => percent(v, 1)}
             yMax={100}
-            type="area"
+            type="line"
             syncId={SYNC_ID}
             showLegend={false}
+            referenceLines={thresholds}
           />
         </div>
 
-        {/* Network */}
+        {/* Network — two-line (RX vs TX) */}
         <div className="card">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-medium text-ink-secondary">Network</h3>
@@ -139,37 +158,83 @@ export function MetricCharts({ host: hostName }: { host: string }) {
           )}
         </div>
 
-        {/* Disk Usage */}
+        {/* Disk — horizontal bar chart per mountpoint */}
         <div className="card">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-medium text-ink-secondary">Disk Usage</h3>
           </div>
-          {latestDisks.length > 0 ? (
-            <div className="space-y-3">
-              {latestDisks.map((disk) => (
-                <div key={disk.path}>
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-mono text-ink-secondary">{disk.path}</span>
-                    <span className="text-ink-muted">
-                      {bytes(disk.used)} / {bytes(disk.total)} ({percent(disk.used_pct, 1)})
-                    </span>
-                  </div>
-                  <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-sunken">
-                    <div
-                      className={`h-full rounded-full transition-all duration-300 ${
-                        disk.used_pct > 80 ? "bg-danger" :
-                        disk.used_pct > 60 ? "bg-status-degraded" : "bg-status-healthy"
-                      }`}
-                      style={{ width: `${Math.min(disk.used_pct, 100)}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="py-8 text-center text-xs text-ink-faint">No disk data</div>
-          )}
+          <DiskUsageBars disks={latestDisks} />
         </div>
+      </div>
+    </div>
+  );
+}
+
+/*
+ * DiskUsageBars — one horizontal bar per mountpoint, length = used %, fill
+ * coloured by threshold (green / amber / red). A bar chart compares mounts at
+ * a glance better than a stack of separate progress bars, and the colour
+ * encoding carries the triage signal without a separate legend.
+ */
+function DiskUsageBars({ disks }: { disks: { path: string; total: number; used: number; used_pct: number }[] }) {
+  const colors = useChartColors();
+
+  if (disks.length === 0) {
+    return <div className="py-8 text-center text-xs text-ink-faint">No disk data</div>;
+  }
+
+  const data = disks.map((d) => ({ path: d.path, used: d.used_pct, usedBytes: d.used, total: d.total }));
+  const cellColor = (pct: number) => (pct > 80 ? colors.danger : pct > 60 ? colors.degraded : colors.healthy);
+  const height = Math.max(120, disks.length * 34 + 24);
+
+  return (
+    <div style={{ height }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data} layout="vertical" margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} horizontal={false} />
+          <XAxis
+            type="number"
+            domain={[0, 100]}
+            stroke={colors.axis}
+            tick={{ fontSize: 11, fill: colors.tick }}
+            tickFormatter={(v: number) => `${v}%`}
+            tickLine={false}
+            axisLine={false}
+          />
+          <YAxis
+            type="category"
+            dataKey="path"
+            stroke={colors.axis}
+            tick={{ fontSize: 11, fill: colors.tick }}
+            width={120}
+            tickLine={false}
+            axisLine={false}
+          />
+          <Tooltip cursor={{ fill: "transparent" }} content={<DiskTooltip />} />
+          <Bar dataKey="used" radius={[0, 3, 3, 0]} isAnimationActive={false}>
+            {data.map((d, i) => (
+              <Cell key={i} fill={cellColor(d.used)} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+interface DiskTooltipProps {
+  active?: boolean;
+  payload?: { payload: { path: string; used: number; usedBytes: number; total: number } }[];
+}
+
+function DiskTooltip({ active, payload }: DiskTooltipProps) {
+  if (!active || !payload?.length) return null;
+  const d = payload[0].payload;
+  return (
+    <div className="rounded-lg border border-line bg-surface px-3 py-2 text-xs shadow-xl">
+      <div className="font-mono text-zinc-300">{d.path}</div>
+      <div className="mt-1 text-zinc-400">
+        {bytes(d.usedBytes)} / {bytes(d.total)} · <span className="text-zinc-200">{d.used.toFixed(1)}%</span>
       </div>
     </div>
   );

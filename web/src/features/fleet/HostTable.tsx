@@ -1,12 +1,20 @@
 import { useState, useRef, useEffect, useCallback, memo } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import type { Host } from "@/lib/api/client";
-import { useHostMetrics } from "@/lib/api/hooks";
+import { useHostMetrics, useHostMetricsLatest } from "@/lib/api/hooks";
 import { StatusBadge } from "./StatusBadge";
-import { Sparkline } from "@/components/Sparkline";
-import { DiffChip } from "@/components/DiffChip";
 import { useDensity } from "@/features/ui/DensityProvider";
-import { relativeTime, percent, rate, duration } from "@/lib/format";
+import { relativeTime, percent } from "@/lib/format";
+
+/*
+ * HostTable — the mature host inventory. No per-row sparklines (trends belong
+ * on the host detail page; Datadog's Host List uses metric columns, not row
+ * sparklines). Each metric is a clean threshold-coloured value, stream-driven
+ * for CPU/Memory (the metrics series is patched by the live sample) and from
+ * the latest snapshot for Disk. Row click drills into host detail; j/k/Enter
+ * keyboard navigation is retained. The expandable inline panel is removed in
+ * favour of the dedicated detail page, which can show far more.
+ */
 
 interface Props {
   hosts: Host[];
@@ -20,10 +28,9 @@ interface Props {
 type Sortable = "name" | "status";
 
 export function HostTable({ hosts, isLoading, error, sort = "name", order = "asc", onSort }: Props) {
-  const { rowPad, cellPad, sparkH } = useDensity();
+  const { rowPad, cellPad } = useDensity();
   const navigate = useNavigate();
   const [selIdx, setSelIdx] = useState(-1);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const tableRef = useRef<HTMLDivElement>(null);
 
   const toggleSort = useCallback(
@@ -35,16 +42,7 @@ export function HostTable({ hosts, isLoading, error, sort = "name", order = "asc
     [sort, order, onSort],
   );
 
-  const toggleExpand = useCallback((name: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
-  }, []);
-
-  // j/k/enter/arrow keyboard navigation.
+  // j/k/enter keyboard navigation.
   useEffect(() => {
     const el = tableRef.current;
     if (!el) return;
@@ -59,16 +57,6 @@ export function HostTable({ hosts, isLoading, error, sort = "name", order = "asc
       } else if (e.key === "Enter" && selIdx >= 0) {
         e.preventDefault();
         navigate({ to: "/hosts/$host/metrics", params: { host: hosts[selIdx].name } });
-      } else if (e.key === "ArrowRight" && selIdx >= 0) {
-        e.preventDefault();
-        setExpanded((prev) => new Set(prev).add(hosts[selIdx].name));
-      } else if (e.key === "ArrowLeft" && selIdx >= 0) {
-        e.preventDefault();
-        setExpanded((prev) => {
-          const next = new Set(prev);
-          next.delete(hosts[selIdx].name);
-          return next;
-        });
       }
     };
     el.addEventListener("keydown", onKey);
@@ -130,8 +118,9 @@ export function HostTable({ hosts, isLoading, error, sort = "name", order = "asc
             >
               Host <SortArrow col="name" />
             </th>
-            <th className={`${cellPad} py-2 font-medium`}>CPU</th>
-            <th className={`${cellPad} py-2 font-medium`}>Memory</th>
+            <th className={`${cellPad} py-2 text-right font-medium`}>CPU</th>
+            <th className={`${cellPad} py-2 text-right font-medium`}>Memory</th>
+            <th className={`${cellPad} py-2 text-right font-medium`}>Disk</th>
             <th className={`${cellPad} py-2 font-medium`}>Environment</th>
             <th className={`${cellPad} py-2 font-medium`}>Tags</th>
             <th
@@ -144,16 +133,7 @@ export function HostTable({ hosts, isLoading, error, sort = "name", order = "asc
         </thead>
         <tbody>
           {hosts.map((h, i) => (
-            <HostRow
-              key={h.name}
-              host={h}
-              selected={i === selIdx}
-              expanded={expanded.has(h.name)}
-              onToggleExpand={() => toggleExpand(h.name)}
-              rowPad={rowPad}
-              cellPad={cellPad}
-              sparkH={sparkH}
-            />
+            <HostRow key={h.name} host={h} selected={i === selIdx} rowPad={rowPad} cellPad={cellPad} />
           ))}
         </tbody>
       </table>
@@ -162,211 +142,86 @@ export function HostTable({ hosts, isLoading, error, sort = "name", order = "asc
         <span className="ml-3 text-ink-faint">
           <kbd className="rounded border border-line px-1">j</kbd>
           <kbd className="ml-0.5 rounded border border-line px-1">k</kbd> navigate ·
-          <kbd className="ml-1 rounded border border-line px-1">↵</kbd> open ·
-          <kbd className="ml-1 rounded border border-line px-1">→</kbd> expand
+          <kbd className="ml-1 rounded border border-line px-1">↵</kbd> open
         </span>
       </div>
     </div>
   );
 }
 
-// --- helpers for series extraction ---
-
-function tail(arr: (number | null)[], n: number): (number | null)[] {
-  return arr.length > n ? arr.slice(arr.length - n) : arr;
-}
 function lastVal(arr: (number | null)[]): number | null {
   for (let i = arr.length - 1; i >= 0; i--) {
     if (arr[i] != null && !isNaN(arr[i] as number)) return arr[i] as number;
   }
   return null;
 }
-function prevVal(arr: (number | null)[]): number | null {
-  let found = false;
-  for (let i = arr.length - 1; i >= 0; i--) {
-    if (arr[i] != null && !isNaN(arr[i] as number)) {
-      if (found) return arr[i] as number;
-      found = true;
-    }
-  }
-  return null;
-}
 
-// --- per-host row (own metrics hook) ---
+function valColor(v: number | null): string {
+  if (v == null) return "text-ink-muted";
+  if (v > 90) return "text-danger";
+  if (v > 75) return "text-status-degraded";
+  if (v > 50) return "text-status-stale";
+  return "text-ink-primary";
+}
 
 interface RowProps {
   host: Host;
   selected: boolean;
-  expanded: boolean;
-  onToggleExpand: () => void;
   rowPad: string;
   cellPad: string;
-  sparkH: number;
 }
 
-const HostRow = memo(function HostRow({ host, selected, expanded, onToggleExpand, rowPad, cellPad, sparkH }: RowProps) {
+const HostRow = memo(function HostRow({ host, selected, rowPad, cellPad }: RowProps) {
   const navigate = useNavigate();
+  // CPU/Memory are stream-driven (the series is patched by the live sample);
+  // Disk comes from the latest snapshot.
   const { data } = useHostMetrics(host.name, "15m");
-  const cpu = data?.series.cpu_total ?? [];
-  const mem = data?.series.mem_used_pct ?? [];
-  const netRx = data?.series.net_rx_bps ?? [];
-  const netTx = data?.series.net_tx_bps ?? [];
+  const { data: latest } = useHostMetricsLatest(host.name);
 
-  const cpuTail = tail(cpu, 60);
-  const memTail = tail(mem, 60);
-  const cpuNow = lastVal(cpu);
-  const cpuPrev = prevVal(cpu);
-  const memNow = lastVal(mem);
-  const memPrev = prevVal(mem);
+  const cpu = lastVal(data?.series.cpu_total ?? []);
+  const mem = lastVal(data?.series.mem_used_pct ?? []);
+  const disks = latest?.disks ?? [];
+  const disk = disks.length > 0 ? Math.max(...disks.map((d) => d.used_pct)) : null;
 
   const open = () => navigate({ to: "/hosts/$host/metrics", params: { host: host.name } });
 
   return (
-    <>
-      <tr
-        className={`table-row group cursor-pointer border-l-2 ${
-          selected ? "border-l-accent bg-surface-raised" : "border-l-transparent"
-        }`}
-        onClick={open}
-      >
-        <td className={`${cellPad} ${rowPad}`}>
-          <StatusBadge status={host.status} />
-        </td>
-        <td className={`${cellPad} ${rowPad}`}>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleExpand();
-              }}
-              className="flex h-5 w-5 items-center justify-center rounded text-ink-muted hover:bg-surface-overlay hover:text-ink-secondary"
-              aria-label={expanded ? "Collapse" : "Expand"}
-            >
-              <svg
-                width="12" height="12" viewBox="0 0 12 12" fill="none"
-                className={`transition-transform ${expanded ? "rotate-90" : ""}`}
-              >
-                <path d="M4 2L8 6L4 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
-            <Link
-              to="/hosts/$host/metrics"
-              params={{ host: host.name }}
-              onClick={(e) => e.stopPropagation()}
-              className="font-medium text-accent hover:text-accent-hover transition-colors"
-            >
-              {host.name}
-            </Link>
-          </div>
-        </td>
-        <td className={`${cellPad} ${rowPad}`}>
-          <div className="flex items-center gap-2">
-            <Sparkline data={cpuTail} width={72} height={sparkH} />
-            <div className="flex flex-col leading-tight">
-              <span className="tabular-nums text-ink-primary">{percent(cpuNow, 0)}</span>
-              <DiffChip current={cpuNow} previous={cpuPrev} polarity="higher-is-worse" format={(d) => `${d.toFixed(1)}%`} />
-            </div>
-          </div>
-        </td>
-        <td className={`${cellPad} ${rowPad}`}>
-          <div className="flex items-center gap-2">
-            <Sparkline data={memTail} color="var(--status-degraded)" width={72} height={sparkH} />
-            <div className="flex flex-col leading-tight">
-              <span className="tabular-nums text-ink-primary">{percent(memNow, 0)}</span>
-              <DiffChip current={memNow} previous={memPrev} polarity="higher-is-worse" format={(d) => `${d.toFixed(1)}%`} />
-            </div>
-          </div>
-        </td>
-        <td className={`${cellPad} ${rowPad} text-ink-secondary`}>{host.environment || "—"}</td>
-        <td className={`${cellPad} ${rowPad}`}>
-          <div className="flex flex-wrap gap-1">
-            {(host.tags ?? []).slice(0, 3).map((t) => (
-              <span key={t} className="rounded bg-surface-raised px-1.5 py-0.5 text-xs text-ink-secondary">
-                {t}
-              </span>
-            ))}
-            {(host.tags ?? []).length > 3 && (
-              <span className="px-1 text-xs text-ink-faint">+{(host.tags ?? []).length - 3}</span>
-            )}
-          </div>
-        </td>
-        <td className={`${cellPad} ${rowPad} text-ink-muted`}>{relativeTime(host.last_sample_at)}</td>
-      </tr>
-      {expanded && (
-        <tr className="border-l-2 border-l-accent/40">
-          <td colSpan={7} className="bg-sunken/40 px-6 py-4">
-            <HostRowExpanded host={host} cpu={cpu} mem={mem} netRx={netRx} netTx={netTx} />
-          </td>
-        </tr>
-      )}
-    </>
+    <tr
+      className={`table-row group cursor-pointer border-l-2 ${
+        selected ? "border-l-accent bg-surface-raised" : "border-l-transparent"
+      }`}
+      onClick={open}
+    >
+      <td className={`${cellPad} ${rowPad}`}>
+        <StatusBadge status={host.status} />
+      </td>
+      <td className={`${cellPad} ${rowPad}`}>
+        <Link
+          to="/hosts/$host/metrics"
+          params={{ host: host.name }}
+          onClick={(e) => e.stopPropagation()}
+          className="font-medium text-accent hover:text-accent-hover transition-colors"
+        >
+          {host.name}
+        </Link>
+      </td>
+      <td className={`${cellPad} ${rowPad} text-right tabular-nums ${valColor(cpu)}`}>{percent(cpu, 0)}</td>
+      <td className={`${cellPad} ${rowPad} text-right tabular-nums ${valColor(mem)}`}>{percent(mem, 0)}</td>
+      <td className={`${cellPad} ${rowPad} text-right tabular-nums ${valColor(disk)}`}>{percent(disk, 0)}</td>
+      <td className={`${cellPad} ${rowPad} text-ink-secondary`}>{host.environment || "—"}</td>
+      <td className={`${cellPad} ${rowPad}`}>
+        <div className="flex flex-wrap gap-1">
+          {(host.tags ?? []).slice(0, 3).map((t) => (
+            <span key={t} className="rounded bg-surface-raised px-1.5 py-0.5 text-xs text-ink-secondary">
+              {t}
+            </span>
+          ))}
+          {(host.tags ?? []).length > 3 && (
+            <span className="px-1 text-xs text-ink-faint">+{(host.tags ?? []).length - 3}</span>
+          )}
+        </div>
+      </td>
+      <td className={`${cellPad} ${rowPad} text-ink-muted`}>{relativeTime(host.last_sample_at)}</td>
+    </tr>
   );
 });
-
-// --- expanded inline panel ---
-
-function HostRowExpanded({
-  host,
-  cpu,
-  mem,
-  netRx,
-  netTx,
-}: {
-  host: Host;
-  cpu: (number | null)[];
-  mem: (number | null)[];
-  netRx: (number | null)[];
-  netTx: (number | null)[];
-}) {
-  const cpuNow = lastVal(cpu);
-  const memNow = lastVal(mem);
-  const rxNow = lastVal(netRx);
-  const txNow = lastVal(netTx);
-  return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-      <ExpandedMetric label="CPU" value={percent(cpuNow, 1)} data={tail(cpu, 120)} />
-      <ExpandedMetric label="Memory" value={percent(memNow, 1)} data={tail(mem, 120)} color="var(--status-degraded)" />
-      <ExpandedMetric
-        label="Network"
-        value={`${rate(rxNow)} ↓ / ${rate(txNow)} ↑`}
-        data={tail(netRx, 120)}
-        data2={tail(netTx, 120)}
-        color="var(--status-healthy)"
-        color2="var(--status-degraded)"
-      />
-      <div className="md:col-span-3 flex flex-wrap items-center gap-x-6 gap-y-1 border-t border-line-subtle pt-3 text-xs text-ink-muted">
-        {host.role && <span>Role: <span className="text-ink-secondary">{host.role}</span></span>}
-        {host.os && <span>OS: <span className="text-ink-secondary">{host.os}</span></span>}
-        {host.ts_dns_name && <span className="font-mono text-ink-secondary">{host.ts_dns_name}</span>}
-        {host.ts_ips?.[0] && <span className="font-mono text-ink-secondary">{host.ts_ips[0]}</span>}
-        {host.uptime_seconds ? <span>Uptime: <span className="text-ink-secondary">{duration(host.uptime_seconds)}</span></span> : null}
-      </div>
-    </div>
-  );
-}
-
-function ExpandedMetric({
-  label,
-  value,
-  data,
-  data2,
-  color = "var(--accent)",
-  color2,
-}: {
-  label: string;
-  value: string;
-  data: (number | null)[];
-  data2?: (number | null)[];
-  color?: string;
-  color2?: string;
-}) {
-  return (
-    <div>
-      <div className="mb-1 flex items-center justify-between">
-        <span className="metric-label">{label}</span>
-        <span className="text-xs tabular-nums text-ink-secondary">{value}</span>
-      </div>
-      <Sparkline data={data} data2={data2} color={color} color2={color2} width={260} height={40} />
-    </div>
-  );
-}
